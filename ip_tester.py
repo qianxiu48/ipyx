@@ -1,638 +1,816 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-IP延迟测试脚本
-功能：测试IP库中IP的延迟、国家和端口信息
+IP延迟测试脚本 - 多国家IP测试与分类存储
+基于Cloudflare IP优选脚本改写
 """
 
 import asyncio
 import aiohttp
-import socket
-import time
-import ipaddress
-from concurrent.futures import ThreadPoolExecutor
-import requests
 import json
-import os
+import random
+import ipaddress
+import time
 import argparse
-from typing import List, Dict, Tuple
+import sys
+from typing import List, Dict, Optional, Tuple, Set
+from dataclasses import dataclass
+from pathlib import Path
+from collections import defaultdict
+
+@dataclass
+class IPResult:
+    """IP测试结果数据类"""
+    ip: str
+    port: int
+    latency: float
+    colo: str
+    country: str
+    type: str  # 'official' or 'proxy'
+    
+    def to_display_format(self) -> str:
+        """转换为显示格式"""
+        type_text = "官方优选" if self.type == "official" else "反代优选"
+        return f"{self.ip}:{self.port}#{self.country} {type_text} {self.latency:.0f}ms"
 
 class IPTester:
-    def __init__(self, max_concurrent=30, timeout=5):
-        self.max_concurrent = max_concurrent
-        self.timeout = timeout
-        self.results = {}
-        self.country_stats = {}
-        
-    async def get_ip_list_from_urls(self) -> List[str]:
-        """从IP库URL获取IP列表"""
-        ip_urls = {
-            "cfip": "https://raw.githubusercontent.com/qianxiu203/cfipcaiji/refs/heads/main/ip.txt",
-            "as13335": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/13335/ipv4-aggregated.txt",
-            "as209242": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/209242/ipv4-aggregated.txt",
-            "as24429": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/24429/ipv4-aggregated.txt",
-            "as35916": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/35916/ipv4-aggregated.txt",
-            "as199524": "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/199524/ipv4-aggregated.txt",
-            "cm": "https://raw.githubusercontent.com/cmliu/cmliu/main/CF-CIDR.txt",
-            "bestali": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestAli/bestaliv4.txt",
-            "bestcfv4": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt",
-            "bestcfv6": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt",
-            "official": "https://www.cloudflare.com/ips-v4/"
-        }
-        
-        all_ips = []
-        
-        async def fetch_url(source_name, url):
-            """异步获取单个URL的IP列表"""
-            try:
-                print(f"正在获取 {source_name} 的IP列表...")
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            text = await response.text()
-                            ips = []
-                            for line in text.split('\n'):
-                                line = line.strip()
-                                if line and not line.startswith('#'):
-                                    # 处理CIDR格式和单个IP
-                                    if '/' in line:
-                                        try:
-                                            network = ipaddress.ip_network(line, strict=False)
-                                            # 限制每个CIDR取前5个IP避免过多
-                                            for ip in list(network.hosts())[:5]:
-                                                ips.append(str(ip))
-                                        except:
-                                            continue
-                                    else:
-                                        try:
-                                            ipaddress.ip_address(line)
-                                            ips.append(line)
-                                        except:
-                                            continue
-                            
-                            print(f"从 {source_name} 获取到 {len(ips)} 个IP")
-                            return ips
-                        else:
-                            print(f"获取 {source_name} 失败: HTTP {response.status}")
-                            return []
-            except Exception as e:
-                print(f"获取 {source_name} 时出错: {e}")
-                return []
-        
-        # 并发获取所有URL
-        tasks = []
-        for source_name, url in ip_urls.items():
-            task = fetch_url(source_name, url)
-            tasks.append(task)
-        
-        results = await asyncio.gather(*tasks)
-        
-        # 合并结果
-        for ips in results:
-            if ips:
-                all_ips.extend(ips)
-        
-        # 去重
-        all_ips = list(set(all_ips))
-        print(f"总共获取到 {len(all_ips)} 个唯一IP")
-        return all_ips
+    """IP测试器 - 支持多国家测试和条件停止"""
     
-    async def get_country_info(self, ip: str) -> str:
-        """获取IP的国家信息"""
-        # 多个API备用，提高成功率
-        apis = [
-            {
-                'url': f"http://ipapi.co/{ip}/json/",
-                'field': 'country_name',
-                'timeout': 3
-            },
-            {
-                'url': f"https://ipinfo.io/{ip}/json",
-                'field': 'country',
-                'timeout': 3
-            },
-            {
-                'url': f"http://ip-api.com/json/{ip}",
-                'field': 'country',
-                'timeout': 3
-            },
-            {
-                'url': f"https://api.ipgeolocation.io/ipgeo?apiKey=demo&ip={ip}",
-                'field': 'country_name',
-                'timeout': 3
-            }
-        ]
+    def __init__(self, target_countries: List[str] = None, max_concurrent: int = 10, 
+                 target_counts: Dict[str, int] = None, target_ports: str = "443"):
+        # 目标国家列表
+        self.target_countries = target_countries or ["US"]
         
-        for api in apis:
+        # 每个国家的目标IP数量
+        self.target_counts = target_counts or {country: 10 for country in self.target_countries}
+        
+        # 并发数量
+        self.max_concurrent = max_concurrent
+        
+        # 支持多个端口
+        if ',' in target_ports:
+            self.target_ports = [p.strip() for p in target_ports.split(',')]
+        else:
+            self.target_ports = [target_ports.strip()]
+
+        # NIP域名
+        self.nip_domain = "ip.090227.xyz"
+        self.session: Optional[aiohttp.ClientSession] = None
+        
+        # 测试结果存储
+        self.results: Dict[str, List[IPResult]] = defaultdict(list)
+        
+        # 已完成的计数器
+        self.completed_counts: Dict[str, int] = defaultdict(int)
+        
+        # IP源列表
+        self.ip_sources = [
+            "official",    # CF官方列表
+            "cm",          # CM整理列表
+            "bestali",     # 最佳阿里云IP
+            "proxyip",     # 反代IP列表
+            "cfip",        # CFIP采集
+            "as13335",     # AS13335 IP段
+            "as209242",    # AS209242 IP段
+            "as24429",     # AS24429 IP段
+            "as35916",     # AS35916 IP段
+            "as199524",    # AS199524 IP段
+            "bestcfv4",    # 最佳CF IPv4
+            "bestcfv6",    # 最佳CF IPv6
+        ]
+
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        connector = aiohttp.TCPConnector(
+            ssl=False,
+            limit=100,
+            limit_per_host=50,
+            ttl_dns_cache=300,
+            use_dns_cache=True
+        )
+
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10),
+            connector=connector
+        )
+        await self._get_nip_domain()
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器出口"""
+        if self.session:
+            await self.session.close()
+    
+    async def _get_nip_domain(self) -> None:
+        """获取NIP域名"""
+        import os
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            print("检测到GitHub Actions环境，使用预设域名")
+            self.nip_domain = "nip.lfree.org"
+            return
+
+        # 备用域名列表
+        backup_domains = ["nip.lfree.org", "ip.090227.xyz", "nip.top", "ip.sb"]
+        self.nip_domain = backup_domains[0]
+        print(f"📡 使用域名: {self.nip_domain}")
+    
+    async def get_all_ips(self) -> List[str]:
+        """获取所有IP源的IP列表"""
+        all_ips = set()
+        
+        for ip_source in self.ip_sources:
+            print(f"正在获取 {ip_source} IP列表...")
+            
             try:
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=api['timeout'])) as session:
-                    async with session.get(api['url']) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            country = data.get(api['field'], '')
-                            if country and country != 'Unknown' and country != '':
-                                return country
+                ips = await self._get_ips_from_source(ip_source)
+                all_ips.update(ips)
+                print(f"✅ 从 {ip_source} 获取到 {len(ips)} 个IP，总计 {len(all_ips)} 个IP")
+                
+                # 如果已经获取到足够多的IP，可以提前停止
+                if len(all_ips) > 10000:
+                    print("⚠️ IP数量已超过10000，停止获取更多IP")
+                    break
+                    
             except Exception as e:
-                # 静默失败，尝试下一个API
+                print(f"❌ 获取 {ip_source} IP失败: {e}")
                 continue
         
-        # 如果所有API都失败，尝试使用本地IP数据库（简化版）
-        # 这里可以添加本地IP数据库查询逻辑
-        return 'Unknown'
+        # 转换为列表并打乱顺序
+        ip_list = list(all_ips)
+        random.shuffle(ip_list)
+        
+        print(f"🎯 最终获取到 {len(ip_list)} 个IP用于测试")
+        return ip_list
     
-    def test_port(self, ip: str, port: int = 80) -> bool:
-        """测试端口是否开放"""
+    async def _get_ips_from_source(self, ip_source: str) -> List[str]:
+        """从指定源获取IP列表"""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex((ip, port))
-            sock.close()
-            return result == 0
-        except:
+            if ip_source == "cfip":
+                url = "https://raw.githubusercontent.com/qianxiu203/cfipcaiji/refs/heads/main/ip.txt"
+            elif ip_source == "as13335":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/13335/ipv4-aggregated.txt"
+            elif ip_source == "as209242":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/209242/ipv4-aggregated.txt"
+            elif ip_source == "as24429":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/24429/ipv4-aggregated.txt"
+            elif ip_source == "as35916":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/35916/ipv4-aggregated.txt"
+            elif ip_source == "as199524":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/199524/ipv4-aggregated.txt"
+            elif ip_source == "cm":
+                url = "https://raw.githubusercontent.com/cmliu/cmliu/main/CF-CIDR.txt"
+            elif ip_source == "bestali":
+                url = "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestAli/bestaliv4.txt"
+            elif ip_source == "bestcfv4":
+                url = "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt"
+            elif ip_source == "bestcfv6":
+                url = "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt"
+            elif ip_source == "proxyip":
+                return await self._get_proxy_ips(self.target_ports[0])
+            else:  # official
+                url = "https://www.cloudflare.com/ips-v4/"
+            
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    text = await response.text()
+                else:
+                    # 使用默认CIDR列表
+                    text = """173.245.48.0/20
+103.21.244.0/22
+103.22.200.0/22
+103.31.4.0/22
+141.101.64.0/18
+108.162.192.0/18
+190.93.240.0/20
+188.114.96.0/20
+197.234.240.0/22
+198.41.128.0/17
+162.158.0.0/15
+104.16.0.0/13
+104.24.0.0/14
+172.64.0.0/13
+131.0.72.0/22"""
+
+            if ip_source in ["bestali", "bestcfv4", "bestcfv6", "cfip"]:
+                lines = [line.strip() for line in text.split('\n') if line.strip() and not line.startswith('#')]
+                valid_ips = []
+                for line in lines:
+                    if self._is_valid_ip(line):
+                        valid_ips.append(line)
+                    elif '/' in line:
+                        try:
+                            cidr_ips = self._generate_ips_from_cidr(line, 5)
+                            valid_ips.extend(cidr_ips)
+                        except:
+                            continue
+                return valid_ips
+            elif ip_source.startswith("as"):
+                # ASN源处理：直接IP列表
+                lines = [line.strip() for line in text.split('\n') if line.strip() and not line.startswith('#')]
+                valid_ips = []
+                for line in lines:
+                    if self._is_valid_ip(line):
+                        valid_ips.append(line)
+                    elif '/' in line:
+                        try:
+                            cidr_ips = self._generate_ips_from_cidr(line, 10)
+                            valid_ips.extend(cidr_ips)
+                        except:
+                            continue
+                return valid_ips
+            else:
+                cidrs = [line.strip() for line in text.split('\n') if line.strip() and not line.startswith('#')]
+                return self._generate_ips_from_cidrs(cidrs, 1000)
+                
+        except Exception as e:
+            print(f"获取 {ip_source} IP失败: {e}")
+            return []
+    
+    async def _get_proxy_ips(self, target_port: str) -> List[str]:
+        """获取反代IP列表"""
+        try:
+            url = "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/baipiao.txt"
+            async with self.session.get(url) as response:
+                if response.status != 200:
+                    return []
+                
+                text = await response.text()
+                lines = [line.strip() for line in text.split('\n') 
+                        if line.strip() and not line.startswith('#')]
+                
+                valid_ips = []
+                for line in lines:
+                    parsed_ip = self._parse_proxy_ip_line(line, target_port)
+                    if parsed_ip:
+                        valid_ips.append(parsed_ip)
+                
+                return valid_ips
+                
+        except Exception as e:
+            print(f"获取反代IP失败: {e}")
+            return []
+    
+    def _parse_proxy_ip_line(self, line: str, target_port: str) -> Optional[str]:
+        """解析反代IP行"""
+        try:
+            line = line.strip()
+            if not line:
+                return None
+            
+            ip = ""
+            port = ""
+            
+            if '#' in line:
+                parts = line.split('#', 1)
+                main_part = parts[0].strip()
+            else:
+                main_part = line
+            
+            if ':' in main_part:
+                ip_port_parts = main_part.split(':')
+                if len(ip_port_parts) == 2:
+                    ip = ip_port_parts[0].strip()
+                    port = ip_port_parts[1].strip()
+                else:
+                    return None
+            else:
+                ip = main_part
+                port = "443"
+            
+            if not self._is_valid_ip(ip):
+                return None
+            
+            try:
+                port_num = int(port)
+                if port_num < 1 or port_num > 65535:
+                    return None
+            except ValueError:
+                return None
+            
+            if port != target_port:
+                return None
+            
+            return f"{ip}:{port}"
+                
+        except Exception:
+            return None
+    
+    def _is_valid_ip(self, ip: str) -> bool:
+        """验证IP地址格式"""
+        try:
+            ipaddress.IPv4Address(ip)
+            return True
+        except ipaddress.AddressValueError:
             return False
     
-    def ping_ip(self, ip: str) -> float:
-        """测试IP延迟 - 使用多种方法，优先使用HTTP请求"""
-        # 方法1: 使用HTTP请求测试延迟（更准确）
-        try:
-            start_time = time.time()
-            response = requests.get(f"http://{ip}", timeout=3, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            end_time = time.time()
-            if response.status_code in [200, 301, 302, 403, 404]:
-                return (end_time - start_time) * 1000
-        except:
-            pass
+    def _generate_ips_from_cidrs(self, cidrs: List[str], max_ips: int) -> List[str]:
+        """从CIDR列表生成IP"""
+        ips = set()
         
-        # 方法2: 使用socket连接测试延迟
-        start_time = time.time()
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            sock.connect((ip, 80))
-            end_time = time.time()
-            sock.close()
-            return (end_time - start_time) * 1000  # 转换为毫秒
-        except:
-            return float('inf')
-    
-    def ping_ip_from_china(self, ip: str) -> float:
-        """从中国网络环境测试IP延迟（模拟国内用户访问）"""
-        # 使用国内测速节点或代理进行测试
-        # 这里可以添加国内测速API或使用代理服务器
-        
-        # 方法1: 使用国内测速API（如果有的话）
-        # 方法2: 使用代理服务器模拟国内网络
-        
-        # 暂时使用标准ping方法，后续可以集成国内测速服务
-        return self.ping_ip(ip)
-    
-    def test_ip_with_china_network(self, ip: str) -> Dict:
-        """使用中国网络环境测试IP"""
-        result = {
-            'ip': ip,
-            'latency_china': float('inf'),
-            'latency_global': float('inf'),
-            'country': 'Unknown',
-            'port_443_open': False,
-            'port_8433_open': False,
-            'port_2053_open': False,
-            'port_2083_open': False,
-            'port_2087_open': False,
-            'port_2096_open': False,
-            'status': 'failed'
-        }
-        
-        try:
-            # 测试全球延迟
-            result['latency_global'] = self.ping_ip(ip)
-            
-            # 测试中国网络延迟
-            result['latency_china'] = self.ping_ip_from_china(ip)
-            
-            # 获取国家信息
-            # 注意：这里需要异步调用，暂时简化处理
-            result['country'] = 'Unknown'
-            
-            # 测试端口
-            result['port_443_open'] = self.test_port(ip, 443)
-            result['port_8433_open'] = self.test_port(ip, 8433)
-            result['port_2053_open'] = self.test_port(ip, 2053)
-            result['port_2083_open'] = self.test_port(ip, 2083)
-            result['port_2087_open'] = self.test_port(ip, 2087)
-            result['port_2096_open'] = self.test_port(ip, 2096)
-            
-            result['status'] = 'success'
-            
-        except Exception as e:
-            result['status'] = f'failed: {str(e)}'
-        
-        return result
-    
-    async def test_single_ip(self, ip: str, test_china_network: bool = False) -> Dict:
-        """测试单个IP的延迟、国家和端口"""
-        if test_china_network:
-            return self.test_ip_with_china_network(ip)
-        
-        result = {
-            'ip': ip,
-            'latency': float('inf'),
-            'latency_china': float('inf'),
-            'country': 'Unknown',
-            'port_443_open': False,
-            'port_8433_open': False,
-            'port_2053_open': False,
-            'port_2083_open': False,
-            'port_2087_open': False,
-            'port_2096_open': False,
-            'status': 'failed'
-        }
-        
-        try:
-            # 测试全球延迟
-            result['latency'] = self.ping_ip(ip)
-            
-            # 测试中国网络延迟（如果可能）
-            try:
-                result['latency_china'] = self.ping_ip_from_china(ip)
-            except:
-                pass
-            
-            # 获取国家信息
-            country = await self.get_country_info(ip)
-            result['country'] = country
-            
-            # 测试端口
-            result['port_443_open'] = self.test_port(ip, 443)
-            result['port_8433_open'] = self.test_port(ip, 8433)
-            result['port_2053_open'] = self.test_port(ip, 2053)
-            result['port_2083_open'] = self.test_port(ip, 2083)
-            result['port_2087_open'] = self.test_port(ip, 2087)
-            result['port_2096_open'] = self.test_port(ip, 2096)
-            
-            result['status'] = 'success'
-            
-        except Exception as e:
-            result['status'] = f'error: {str(e)}'
-        
-        return result
-    
-    async def test_ip_batch(self, ip_batch: List[str], test_china_network: bool = False) -> List[Dict]:
-        """批量测试IP"""
-        # 使用线程池执行同步操作，避免阻塞事件循环
-        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
-            # 创建所有任务
-            tasks = []
-            for ip in ip_batch:
-                # 将同步方法包装为异步任务
-                task = asyncio.get_event_loop().run_in_executor(
-                    executor, 
-                    self.test_single_ip_sync, 
-                    ip,
-                    test_china_network
-                )
-                tasks.append(task)
-            
-            # 等待所有任务完成
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 过滤异常结果
-        valid_results = []
-        for result in results:
-            if isinstance(result, dict):
-                valid_results.append(result)
-        
-        return valid_results
-    
-    def test_single_ip_sync(self, ip: str, test_china_network: bool = False) -> Dict:
-        """同步版本的单个IP测试"""
-        if test_china_network:
-            return self.test_ip_with_china_network(ip)
-        
-        result = {
-            'ip': ip,
-            'latency': float('inf'),
-            'latency_china': float('inf'),
-            'country': 'Unknown',
-            'port_443_open': False,
-            'port_8433_open': False,
-            'port_2053_open': False,
-            'port_2083_open': False,
-            'port_2087_open': False,
-            'port_2096_open': False,
-            'status': 'failed'
-        }
-        
-        try:
-            # 测试全球延迟
-            result['latency'] = self.ping_ip(ip)
-            
-            # 测试中国网络延迟（如果可能）
-            try:
-                result['latency_china'] = self.ping_ip_from_china(ip)
-            except:
-                pass
-            
-            # 获取国家信息（使用同步请求）
-            country = self.get_country_info_sync(ip)
-            result['country'] = country
-            
-            # 测试端口
-            result['port_443_open'] = self.test_port(ip, 443)
-            result['port_8433_open'] = self.test_port(ip, 8433)
-            result['port_2053_open'] = self.test_port(ip, 2053)
-            result['port_2083_open'] = self.test_port(ip, 2083)
-            result['port_2087_open'] = self.test_port(ip, 2087)
-            result['port_2096_open'] = self.test_port(ip, 2096)
-            
-            result['status'] = 'success'
-            
-        except Exception as e:
-            result['status'] = f'error: {str(e)}'
-        
-        return result
-    
-    def get_country_info_sync(self, ip: str) -> str:
-        """同步版本的国家信息获取"""
-        # 多个API备用，提高成功率
-        apis = [
-            {
-                'url': f"http://ipapi.co/{ip}/json/",
-                'field': 'country_name',
-                'timeout': 3
-            },
-            {
-                'url': f"https://ipinfo.io/{ip}/json",
-                'field': 'country',
-                'timeout': 3
-            },
-            {
-                'url': f"http://ip-api.com/json/{ip}",
-                'field': 'country',
-                'timeout': 3
-            }
-        ]
-        
-        for api in apis:
-            try:
-                response = requests.get(api['url'], timeout=api['timeout'])
-                if response.status_code == 200:
-                    data = response.json()
-                    country = data.get(api['field'], '')
-                    if country and country != 'Unknown' and country != '':
-                        return country
-            except:
-                continue
-        
-        return 'Unknown'
-    
-    def save_results_by_country(self, results: List[Dict], target_countries: list = None, max_ips_per_country: int = 3, test_china_network: bool = False):
-        """按国家保存结果到对应txt文件，只保存目标国家的IP，每个国家最多保存指定数量的IP"""
-        if target_countries is None:
-            target_countries = ['JP', 'SG', 'US']  # 默认目标国家
-            
-        latency_field = 'latency_china' if test_china_network else 'latency'
-        
-        country_data = {}
-        
-        for result in results:
-            if result['status'] == 'success' and result[latency_field] <= 300:  # 只保存延迟<=300ms的IP
-                country = result['country']
-                # 只保存目标国家的IP
-                if country in target_countries:
-                    if country not in country_data:
-                        country_data[country] = []
-                    
-                    country_data[country].append(result)
-        
-        # 创建国家目录
-        country_dir = "country_results"
-        if not os.path.exists(country_dir):
-            os.makedirs(country_dir)
-        
-        # 只保存目标国家的IP信息，每个国家最多保存max_ips_per_country个
-        for country in target_countries:
-            ips = country_data.get(country, [])
-            # 按延迟排序，取延迟最低的前max_ips_per_country个
-            ips.sort(key=lambda x: x[latency_field])
-            ips = ips[:max_ips_per_country]  # 只保留前max_ips_per_country个
-            
-            filename = os.path.join(country_dir, f"{country.replace(' ', '_')}.txt")
-            
-            with open(filename, 'w', encoding='utf-8') as f:
-                for ip_info in ips:
-                    # 简化格式：IP#国家 延迟
-                    f.write(f"{ip_info['ip']}#{country.lower()} {ip_info[latency_field]:.2f}\n")
-            
-            test_mode = "中国网络环境" if test_china_network else "全球网络环境"
-            print(f"已保存 {country} 的 {len(ips)} 个延迟<=300ms的IP到 {filename} ({test_mode})")
-            
-        # 删除非目标国家的文件
-        for filename in os.listdir(country_dir):
-            file_path = os.path.join(country_dir, filename)
-            if os.path.isfile(file_path):
-                # 检查文件名是否对应目标国家
-                country_code = filename.replace('.txt', '').upper()
-                if country_code not in target_countries:
-                    os.remove(file_path)
-                    print(f"已删除非目标国家文件: {filename}")
-    
-    def should_stop_testing(self, target_countries: list = None, min_ips_per_country: int = 3) -> bool:
-        """判断是否满足停止条件"""
-        if target_countries is None:
-            target_countries = ['JP', 'SG', 'US']  # 默认目标国家
-            
-        country_counts = {}
-        
-        for result in self.results.values():
-            if result['status'] == 'success' and result['latency'] <= 300:  # 只统计延迟<=300ms的IP
-                country = result['country']
-                # 只统计目标国家的IP
-                if country in target_countries:
-                    country_counts[country] = country_counts.get(country, 0) + 1
-        
-        # 检查所有目标国家是否都满足最小IP数量
-        for country in target_countries:
-            if country_counts.get(country, 0) < min_ips_per_country:
-                return False
-        
-        return True
-    
-    async def run_test(self, target_countries: list = None, min_ips_per_country: int = 3, test_china_network: bool = False):
-        """运行IP测试"""
-        if target_countries is None:
-            target_countries = ['JP', 'SG', 'US']  # 默认目标国家
-            
-        test_mode = "中国网络环境" if test_china_network else "全球网络环境"
-        latency_field = 'latency_china' if test_china_network else 'latency'
-        
-        print(f"目标国家: {target_countries}")
-        print(f"测试模式: {test_mode}")
-        print(f"每个国家最少IP数: {min_ips_per_country}")
-        print(f"最大延迟限制: 300ms")
-        
-        print("开始获取IP列表...")
-        all_ips = await self.get_ip_list_from_urls()
-        
-        if not all_ips:
-            print("未获取到任何IP，程序结束")
-            return
-        
-        print(f"开始测试 {len(all_ips)} 个IP...")
-        
-        # 跟踪每个目标国家的完成状态
-        completed_countries = set()
-        
-        # 分批测试
-        batch_size = self.max_concurrent
-        tested_count = 0
-        
-        for i in range(0, len(all_ips), batch_size):
-            batch = all_ips[i:i + batch_size]
-            print(f"\n测试批次 {i//batch_size + 1}: {len(batch)} 个IP")
-            
-            batch_results = await self.test_ip_batch(batch, test_china_network)
-            
-            # 保存结果
-            for result in batch_results:
-                self.results[result['ip']] = result
-                
-                if result['status'] == 'success':
-                    country = result['country']
-                    self.country_stats[country] = self.country_stats.get(country, 0) + 1
-                    
-                    # 显示延迟信息，标记超过300ms的IP
-                    latency = result[latency_field]
-                    global_latency = result.get('latency', 'N/A')
-                    china_latency = result.get('latency_china', 'N/A')
-                    
-                    latency_info = f"{test_mode}延迟: {latency:.2f}ms"
-                    if latency > 300:
-                        latency_info += " (超过300ms，不保存)"
-                    
-                    if test_china_network:
-                        print(f"  {result['ip']} - {country} - {latency_info} (全球延迟: {global_latency:.2f}ms)")
-                    else:
-                        print(f"  {result['ip']} - {country} - {latency_info} (中国延迟: {china_latency:.2f}ms)")
-                else:
-                    print(f"  {result['ip']} - 测试失败")
-            
-            tested_count += len(batch)
-            
-            # 检查每个目标国家的完成状态
-            country_counts = {}
-            for result in self.results.values():
-                if result['status'] == 'success' and result[latency_field] <= 300:
-                    country = result['country']
-                    # 只统计目标国家的IP
-                    if country in target_countries:
-                        country_counts[country] = country_counts.get(country, 0) + 1
-            
-            # 更新已完成的国家
-            for country in target_countries:
-                if country not in completed_countries and country_counts.get(country, 0) >= min_ips_per_country:
-                    completed_countries.add(country)
-                    print(f"\n✅ 国家 {country} 已完成: 找到 {country_counts[country]} 个延迟<=300ms的IP")
-            
-            # 检查是否所有目标国家都已完成
-            if len(completed_countries) == len(target_countries):
-                print(f"\n🎉 所有目标国家都已完成!")
+        for cidr in cidrs:
+            if len(ips) >= max_ips:
                 break
             
-            # 显示当前状态
-            remaining_countries = [c for c in target_countries if c not in completed_countries]
-            if remaining_countries:
-                print(f"剩余目标国家: {remaining_countries}")
+            cidr_ips = self._generate_ips_from_cidr(cidr.strip(), 10)
+            ips.update(cidr_ips)
+        
+        return list(ips)[:max_ips]
+    
+    def _generate_ips_from_cidr(self, cidr: str, count: int = 1) -> List[str]:
+        """从单个CIDR生成IP"""
+        try:
+            network = ipaddress.IPv4Network(cidr, strict=False)
+            max_hosts = network.num_addresses - 2
             
-            # 进度显示
-            progress = (tested_count / len(all_ips)) * 100
-            print(f"进度: {progress:.1f}% ({tested_count}/{len(all_ips)})")
+            if max_hosts <= 0:
+                return []
             
-            # 短暂延迟避免请求过快
-            await asyncio.sleep(1)
-        
-        # 保存结果
-        print("\n正在按国家保存结果...")
-        self.save_results_by_country(list(self.results.values()), target_countries, min_ips_per_country, test_china_network)
-        
-        # 显示统计信息
-        print("\n=== 测试统计 ===")
-        print(f"总测试IP数: {len(self.results)}")
-        print(f"成功测试数: {sum(1 for r in self.results.values() if r['status'] == 'success')}")
-        
-        # 只统计目标国家的延迟<=300ms的IP
-        target_country_ips = sum(1 for r in self.results.values() 
-                                if r['status'] == 'success' and r[latency_field] <= 300 
-                                and r['country'] in target_countries)
-        print(f"目标国家延迟<=300ms的可用IP数: {target_country_ips}")
-        
-        print(f"覆盖国家数: {len(self.country_stats)}")
-        
-        # 显示目标国家的统计
-        print("\n目标国家统计:")
-        for country in target_countries:
-            count = sum(1 for r in self.results.values() if r['status'] == 'success' and r['country'] == country and r[latency_field] <= 300)
-            status = "✅ 已完成" if country in completed_countries else "⏳ 进行中"
-            print(f"  {country}: {count} 个延迟<=300ms的IP ({status})")
-        
-        # 显示前10个最快的IP
-        successful_tests = [r for r in self.results.values() if r['status'] == 'success' and r[latency_field] <= 300]
-        successful_tests.sort(key=lambda x: x[latency_field])
-        
-        print(f"\n前10个最快的IP ({test_mode}):")
-        for i, result in enumerate(successful_tests[:10]):
-            latency = result[latency_field]
-            global_latency = result.get('latency', 'N/A')
-            china_latency = result.get('latency_china', 'N/A')
+            actual_count = min(count, max_hosts)
+            ips = set()
             
-            print(f"{i+1}. IP: {result['ip']}")
-            if test_china_network:
-                print(f"   中国延迟: {china_latency:.2f}ms, 全球延迟: {global_latency:.2f}ms, 国家: {result['country']}")
+            attempts = 0
+            max_attempts = actual_count * 10
+            
+            while len(ips) < actual_count and attempts < max_attempts:
+                random_offset = random.randint(1, max_hosts)
+                random_ip = str(network.network_address + random_offset)
+                ips.add(random_ip)
+                attempts += 1
+            
+            return list(ips)
+
+        except Exception as e:
+            print(f"生成CIDR {cidr} IP失败: {e}")
+            return []
+
+    async def test_ips(self, ips: List[str]) -> Dict[str, List[IPResult]]:
+        """测试IP列表"""
+        print(f"🚀 开始测试 {len(ips)} 个IP，并发数: {self.max_concurrent}")
+        
+        # 创建信号量控制并发
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        async def test_with_semaphore(ip: str) -> Optional[IPResult]:
+            async with semaphore:
+                return await self.test_ip(ip)
+        
+        # 批量测试
+        tasks = [test_with_semaphore(ip) for ip in ips]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理结果
+        valid_results = []
+        for result in results:
+            if isinstance(result, IPResult):
+                valid_results.append(result)
+            elif isinstance(result, Exception):
+                continue
+        
+        # 按国家分类
+        for result in valid_results:
+            if result.country in self.target_countries:
+                self.results[result.country].append(result)
+                self.completed_counts[result.country] = len(self.results[result.country])
+        
+        print(f"✅ 测试完成，有效结果: {len(valid_results)} 个")
+        return self.results
+    
+    async def test_ip(self, ip: str) -> Optional[IPResult]:
+        """测试单个IP"""
+        timeout = 5.0
+        
+        # 解析IP格式
+        parsed_ip = self._parse_ip_format(ip, int(self.target_ports[0]))
+        if not parsed_ip:
+            return None
+        
+        # 进行测试，最多重试2次
+        for attempt in range(1, 3):
+            result = await self._single_test(parsed_ip['host'], parsed_ip['port'], timeout)
+            if result:
+                # 获取国家代码
+                country_code = await self._get_country_from_colo(result['colo'])
+                
+                # 检查延迟是否超过300ms
+                if result['latency'] > 300:
+                    print(f"⚠️ 跳过延迟过高的IP: {parsed_ip['host']}:{parsed_ip['port']} - {result['latency']:.0f}ms")
+                    return None
+                
+                # 检查是否满足停止条件
+                if self._should_stop_testing(country_code):
+                    return None
+                
+                return IPResult(
+                    ip=parsed_ip['host'],
+                    port=parsed_ip['port'],
+                    latency=result['latency'],
+                    colo=result['colo'],
+                    country=country_code,
+                    type=result['type']
+                )
             else:
-                print(f"   全球延迟: {global_latency:.2f}ms, 中国延迟: {china_latency:.2f}ms, 国家: {result['country']}")
-            print(f"   端口状态: 443:{result['port_443_open']} 8433:{result['port_8433_open']} 2053:{result['port_2053_open']}")
-            print(f"             2083:{result['port_2083_open']} 2087:{result['port_2087_open']} 2096:{result['port_2096_open']}")
+                if attempt < 2:
+                    await asyncio.sleep(0.1)
+        
+        return None
+    
+    def _parse_ip_format(self, ip_string: str, default_port: int) -> Optional[Dict]:
+        """解析IP格式"""
+        try:
+            host = ""
+            port = default_port
+            
+            # 处理注释部分
+            main_part = ip_string
+            if '#' in ip_string:
+                parts = ip_string.split('#', 1)
+                main_part = parts[0]
+            
+            # 处理端口部分
+            if ':' in main_part:
+                parts = main_part.split(':')
+                host = parts[0]
+                try:
+                    port = int(parts[1])
+                except ValueError:
+                    return None
+            else:
+                host = main_part
+            
+            # 验证IP格式
+            if not host or not self._is_valid_ip(host.strip()):
+                return None
+            
+            return {
+                'host': host.strip(),
+                'port': port,
+                'comment': None
+            }
+        except Exception:
+            return None
+    
+    async def _single_test(self, ip: str, port: int, timeout: float) -> Optional[Dict]:
+        """单次IP测试"""
+        try:
+            # 构建测试URL
+            parts = ip.split('.')
+            hex_parts = [f"{int(part):02x}" for part in parts]
+            nip = ''.join(hex_parts)
+            test_url = f"https://{nip}.{self.nip_domain}:{port}/cdn-cgi/trace"
+
+            start_time = time.time()
+
+            async with self.session.get(
+                test_url,
+                timeout=aiohttp.ClientTimeout(total=timeout, connect=timeout/2),
+                allow_redirects=False
+            ) as response:
+                if response.status == 200:
+                    latency = (time.time() - start_time) * 1000
+                    response_text = await response.text()
+
+                    # 解析trace响应
+                    trace_data = self._parse_trace_response(response_text)
+
+                    if trace_data and trace_data.get('ip') and trace_data.get('colo'):
+                        response_ip = trace_data['ip']
+                        ip_type = 'official'
+
+                        if ':' in response_ip or response_ip == ip:
+                            ip_type = 'proxy'
+
+                        return {
+                            'ip': ip,
+                            'port': port,
+                            'latency': latency,
+                            'colo': trace_data['colo'],
+                            'type': ip_type,
+                            'response_ip': response_ip
+                        }
+
+            return None
+
+        except asyncio.TimeoutError:
+            return None
+        except Exception as e:
+            return None
+    
+    def _parse_trace_response(self, response_text: str) -> Optional[Dict]:
+        """解析trace响应"""
+        try:
+            lines = response_text.split('\n')
+            data = {}
+
+            for line in lines:
+                trimmed_line = line.strip()
+                if trimmed_line and '=' in trimmed_line:
+                    key, value = trimmed_line.split('=', 1)
+                    data[key] = value
+
+            return data
+        except Exception:
+            return None
+    
+    async def _get_country_from_colo(self, colo: str) -> str:
+        """从colo获取国家代码"""
+        colo_to_country = {
+            # 美国
+            'ATL': 'US', 'BOS': 'US', 'BUF': 'US', 'CHI': 'US', 'DEN': 'US',
+            'DFW': 'US', 'EWR': 'US', 'IAD': 'US', 'LAS': 'US', 'LAX': 'US',
+            'MIA': 'US', 'MSP': 'US', 'ORD': 'US', 'PDX': 'US', 'PHX': 'US',
+            'SAN': 'US', 'SEA': 'US', 'SJC': 'US', 'STL': 'US', 'IAH': 'US',
+            
+            # 中国大陆和地区
+            'HKG': 'HK',  # 香港
+            'TPE': 'TW',  # 台湾
+            
+            # 日本
+            'NRT': 'JP', 'KIX': 'JP', 'ITM': 'JP',
+            
+            # 韩国
+            'ICN': 'KR', 'GMP': 'KR',
+            
+            # 新加坡
+            'SIN': 'SG',
+            
+            # 英国
+            'LHR': 'GB', 'MAN': 'GB', 'EDI': 'GB',
+            
+            # 德国
+            'FRA': 'DE', 'DUS': 'DE', 'HAM': 'DE', 'MUC': 'DE',
+            
+            # 法国
+            'CDG': 'FR', 'MRS': 'FR',
+            
+            # 荷兰
+            'AMS': 'NL',
+            
+            # 澳大利亚
+            'SYD': 'AU', 'MEL': 'AU', 'PER': 'AU', 'BNE': 'AU',
+            
+            # 加拿大
+            'YYZ': 'CA', 'YVR': 'CA', 'YUL': 'CA',
+            
+            # 巴西
+            'GRU': 'BR', 'GIG': 'BR',
+            
+            # 印度
+            'BOM': 'IN', 'DEL': 'IN',
+            
+            # 其他常见colo
+            'MAD': 'ES', 'MXP': 'IT', 'ARN': 'SE', 'CPH': 'DK',
+            'WAW': 'PL', 'PRG': 'CZ', 'VIE': 'AT', 'ZRH': 'CH',
+        }
+        
+        # 提取前三个字母作为colo代码
+        colo_code = colo[:3].upper()
+        return colo_to_country.get(colo_code, "UNKNOWN")
+    
+    def _should_stop_testing(self, country_code: str) -> bool:
+        """检查是否应该停止测试"""
+        # 在GitHub Actions环境中，不根据目标数量停止测试
+        # 而是运行所有批次的IP，让GitHub Actions控制整体流程
+        import os
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            return False
+        
+        # 本地运行时，使用原有的停止条件
+        if country_code not in self.target_countries:
+            return False
+        
+        current_count = self.completed_counts.get(country_code, 0)
+        target_count = self.target_counts.get(country_code, 0)
+        
+        return current_count >= target_count
+    
+    def save_results_to_files(self, output_dir: str = "ip_results") -> None:
+        """将结果保存到对应国家的txt文件"""
+        # 创建输出目录
+        output_path = Path(output_dir)
+        output_path.mkdir(exist_ok=True)
+        
+        print(f"💾 正在保存结果到目录: {output_path.absolute()}")
+        
+        # 过滤延迟超过300ms的IP
+        filtered_results = {}
+        for country, ip_results in self.results.items():
+            filtered_ips = [r for r in ip_results if r.latency <= 300]
+            if filtered_ips:
+                filtered_results[country] = filtered_ips
+        
+        # 更新结果
+        self.results = filtered_results
+        
+        for country, ip_results in self.results.items():
+            if not ip_results:
+                continue
+                
+            # 按延迟排序
+            ip_results.sort(key=lambda x: x.latency)
+            
+            # 创建国家文件
+            file_path = output_path / f"{country}_ips.txt"
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # 直接写入IP数据，不包含注释头
+                for result in ip_results:
+                    f.write(f"{result.to_display_format()}\n")
+            
+            print(f"✅ {country}: 保存了 {len(ip_results)} 个IP到 {file_path.name} (已过滤延迟>300ms的节点)")
+        
+        # 创建汇总文件
+        summary_path = output_path / "summary.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write("# IP测试汇总报告\n")
+            f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("# 已过滤延迟超过300ms的节点\n\n")
+            
+            total_count = 0
+            for country, ip_results in self.results.items():
+                if ip_results:
+                    count = len(ip_results)
+                    total_count += count
+                    avg_latency = sum(r.latency for r in ip_results) / count
+                    f.write(f"{country}: {count} 个IP，平均延迟 {avg_latency:.1f}ms\n")
+            
+            f.write(f"\n总计: {total_count} 个有效IP (延迟≤300ms)")
+        
+        print(f"📊 汇总报告已保存到 {summary_path.name}")
+
+def load_config_from_yaml():
+    """从GitHub Actions配置文件加载参数"""
+    config_path = Path(__file__).parent / ".github" / "workflows" / "ip_test.yml"
+    
+    if not config_path.exists():
+        return None
+    
+    try:
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f)
+        
+        # 提取workflow_dispatch的inputs配置
+        inputs = config_data.get('on', {}).get('workflow_dispatch', {}).get('inputs', {})
+        
+        config = {
+            'countries': inputs.get('countries', {}).get('default', 'US'),
+            'counts': inputs.get('counts', {}).get('default', '3'),
+            'batch_size': inputs.get('batch_size', {}).get('default', '20'),
+            'max_ips': inputs.get('max_ips', {}).get('default', '0'),
+            'concurrent': inputs.get('concurrent', {}).get('default', '10'),
+            'ports': inputs.get('ports', {}).get('default', '443')
+        }
+        
+        print(f"📋 从配置文件加载参数: {config}")
+        return config
+        
+    except Exception as e:
+        print(f"⚠️ 加载配置文件失败: {e}")
+        return None
 
 async def main():
     """主函数"""
-    # 解析命令行参数
+    # 首先尝试从配置文件加载参数
+    config = load_config_from_yaml()
+    
     parser = argparse.ArgumentParser(description='IP延迟测试脚本')
-    parser.add_argument('--target-countries', type=str, default='JP,SG,US',
-                       help='目标国家代码列表（逗号分隔，如：JP,SG,US）')
-    parser.add_argument('--min-ips', type=int, default=3,
-                       help='每个国家最少IP数量')
-    parser.add_argument('--max-concurrent', type=int, default=30,
-                       help='最大并发数')
-    parser.add_argument('--test-china-network', action='store_true',
-                       help='使用中国网络环境测试IP延迟')
+    
+    # 如果配置文件存在，使用配置文件中的默认值
+    if config:
+        parser.add_argument('--countries', type=str, default=config['countries'],
+                            help='目标国家列表，逗号分隔')
+        parser.add_argument('--counts', type=str, default=config['counts'],
+                            help='每个国家的目标IP数量，逗号分隔')
+        parser.add_argument('--concurrent', type=int, default=int(config['concurrent']),
+                            help='并发测试数量')
+        parser.add_argument('--ports', type=str, default=config['ports'],
+                            help='测试端口，逗号分隔')
+        parser.add_argument('--batch-size', type=int, default=int(config['batch_size']),
+                            help='每批处理的IP数量（0表示不分批）')
+        parser.add_argument('--max-ips', type=int, default=int(config['max_ips']),
+                            help='最大IP数量限制（0表示无限制）')
+    else:
+        # 如果配置文件不存在，使用硬编码默认值
+        parser.add_argument('--countries', type=str, default='CN,US,JP,HK,TW,SG,KR',
+                            help='目标国家列表，逗号分隔')
+        parser.add_argument('--counts', type=str, default='10,10,10,10,10,10,10',
+                            help='每个国家的目标IP数量，逗号分隔')
+        parser.add_argument('--concurrent', type=int, default=10,
+                            help='并发测试数量')
+        parser.add_argument('--ports', type=str, default='443',
+                            help='测试端口，逗号分隔')
+        parser.add_argument('--batch-size', type=int, default=0,
+                            help='每批处理的IP数量（0表示不分批）')
+        parser.add_argument('--max-ips', type=int, default=0,
+                            help='最大IP数量限制（0表示无限制）')
+    
+    parser.add_argument('--output', type=str, default='ip_results',
+                        help='输出目录')
+    parser.add_argument('--batch-index', type=int, default=0,
+                        help='当前批次索引')
     
     args = parser.parse_args()
     
-    # 处理目标国家参数
-    target_countries = [country.strip().upper() for country in args.target_countries.split(',')]
+    # 解析参数
+    countries = [c.strip().upper() for c in args.countries.split(',')]
+    count_list = [int(c.strip()) for c in args.counts.split(',')]
     
-    test_mode = "中国网络环境" if args.test_china_network else "全球网络环境"
-    print("=== IP延迟测试脚本 ===")
-    print(f"测试模式: {test_mode}")
-    print(f"目标国家: {target_countries}")
-    print(f"每个国家最少IP数: {args.min_ips}")
-    print(f"最大并发数: {args.max_concurrent}")
+    # 确保国家和数量列表长度一致
+    if len(countries) != len(count_list):
+        print("❌ 错误：国家和数量列表长度不一致")
+        return
     
-    # 配置参数
-    max_concurrent = args.max_concurrent  # 并发数
-    min_ips_per_country = args.min_ips  # 每个国家最少IP数
+    target_counts = dict(zip(countries, count_list))
     
-    tester = IPTester(max_concurrent=max_concurrent)
+    print("🎯 IP延迟测试脚本启动")
+    print(f"目标国家: {', '.join(countries)}")
+    print(f"目标数量: {target_counts}")
+    print(f"并发数量: {args.concurrent}")
+    print(f"测试端口: {args.ports}")
+    print("-" * 50)
     
-    try:
-        await tester.run_test(target_countries, min_ips_per_country, args.test_china_network)
-    except KeyboardInterrupt:
-        print("\n用户中断测试")
-    except Exception as e:
-        print(f"测试过程中出错: {e}")
-    
-    print("\n测试完成！")
+    # 创建测试器
+    async with IPTester(
+        target_countries=countries,
+        target_counts=target_counts,
+        max_concurrent=args.concurrent,
+        target_ports=args.ports
+    ) as tester:
+        
+        # 获取IP列表
+        ips = await tester.get_all_ips()
+        
+        if not ips:
+            print("❌ 无法获取IP列表，程序退出")
+            return
+        
+        # 应用最大IP限制
+        if args.max_ips > 0 and len(ips) > args.max_ips:
+            print(f"📊 应用最大IP限制: {args.max_ips}")
+            ips = ips[:args.max_ips]
+        
+        # 分批处理逻辑
+        if args.batch_size > 0:
+            total_batches = (len(ips) + args.batch_size - 1) // args.batch_size
+            
+            if args.batch_index >= total_batches:
+                print(f"❌ 批次索引 {args.batch_index} 超出范围，总批次: {total_batches}")
+                return
+            
+            start_idx = args.batch_index * args.batch_size
+            end_idx = min(start_idx + args.batch_size, len(ips))
+            batch_ips = ips[start_idx:end_idx]
+            
+            print(f"📦 分批处理: 第 {args.batch_index + 1}/{total_batches} 批")
+            print(f"📊 处理IP范围: {start_idx + 1}-{end_idx} (共{len(batch_ips)}个)")
+            
+            # 在GitHub Actions环境中，禁用停止条件，运行所有IP
+            import os
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                print("🔧 GitHub Actions环境: 禁用停止条件，运行所有批次IP")
+                # 临时禁用停止条件
+                original_should_stop = tester._should_stop_testing
+                tester._should_stop_testing = lambda country_code: False
+            
+            # 测试当前批次的IP
+            results = await tester.test_ips(batch_ips)
+            
+            # 恢复原始停止条件函数
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                tester._should_stop_testing = original_should_stop
+        else:
+            # 不分批，测试所有IP
+            results = await tester.test_ips(ips)
+        
+        # 保存结果
+        if args.batch_size > 0:
+            # 分批运行时，使用批次特定的输出目录
+            batch_output = f"{args.output}_batch_{args.batch_index}"
+            tester.save_results_to_files(batch_output)
+            print(f"💾 批次结果保存到: {batch_output}")
+        else:
+            # 不分批运行时，使用普通输出目录
+            tester.save_results_to_files(args.output)
+        
+        # 显示统计信息
+        print("\n📊 测试统计:")
+        for country, ip_results in results.items():
+            if ip_results:
+                avg_latency = sum(r.latency for r in ip_results) / len(ip_results)
+                print(f"  {country}: {len(ip_results)} 个IP，平均延迟 {avg_latency:.1f}ms")
+        
+        total_count = sum(len(r) for r in results.values())
+        print(f"总计: {total_count} 个有效IP")
+        
+        # 如果是分批运行，显示批次信息
+        if args.batch_size > 0:
+            total_batches = (len(ips) + args.batch_size - 1) // args.batch_size
+            print(f"📦 当前批次: {args.batch_index + 1}/{total_batches}")
+            
+            # 提示如何合并结果
+            if args.batch_index == total_batches - 1:
+                print("\n💡 提示: 所有批次已完成，可以使用合并脚本合并结果")
+            else:
+                print(f"💡 提示: 还有 {total_batches - args.batch_index - 1} 个批次需要运行")
 
 if __name__ == "__main__":
     asyncio.run(main())

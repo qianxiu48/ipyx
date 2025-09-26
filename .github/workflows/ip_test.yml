@@ -1,0 +1,165 @@
+name: IP延迟测试
+
+on:
+  workflow_dispatch:
+    inputs:
+      countries:
+        description: '目标国家列表（逗号分隔）'
+        required: false
+        default: 'US'
+        type: string
+      counts:
+        description: '每个国家的目标IP数量（逗号分隔）'
+        required: false
+        default: '3'
+        type: string
+      batch_size:
+        description: '每批处理的IP数量'
+        required: false
+        default: '20'
+        type: number
+      max_ips:
+        description: '最大IP数量限制（0表示无限制）'
+        required: false
+        default: '0'
+        type: number
+      concurrent:
+        description: '并发测试数量'
+        required: false
+        default: '10'
+        type: number
+      ports:
+        description: '测试端口（逗号分隔）'
+        required: false
+        default: '443'
+        type: string
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      batch_count: ${{ steps.calc_batches.outputs.batch_count }}
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 计算批次数量
+      id: calc_batches
+      run: |
+        # 模拟获取IP数量（实际运行时会动态计算）
+        # 这里使用固定值来演示
+        TOTAL_IPS=2000
+        BATCH_SIZE=${{ github.event.inputs.batch_size }}
+        
+        if [ $BATCH_SIZE -eq 0 ]; then
+          BATCH_COUNT=1
+        else
+          BATCH_COUNT=$(( (TOTAL_IPS + BATCH_SIZE - 1) / BATCH_SIZE ))
+        fi
+        
+        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
+        echo "📊 总IP数量: $TOTAL_IPS"
+        echo "📦 批次大小: $BATCH_SIZE"
+        echo "🔢 批次数量: $BATCH_COUNT"
+
+  ip-test:
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      matrix:
+        batch_index: ${{ fromJson(format('[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]', needs.setup.outputs.batch_count)) }}
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install aiohttp
+
+    - name: 运行IP测试
+      run: |
+        python ip_tester.py \
+          --countries "${{ github.event.inputs.countries }}" \
+          --counts "${{ github.event.inputs.counts }}" \
+          --batch-size ${{ github.event.inputs.batch_size }} \
+          --batch-index ${{ matrix.batch_index }} \
+          --max-ips ${{ github.event.inputs.max_ips }} \
+          --concurrent ${{ github.event.inputs.concurrent }} \
+          --ports "${{ github.event.inputs.ports }}" \
+          --output ip_results
+
+    - name: 上传测试结果
+      uses: actions/upload-artifact@v4
+      with:
+        name: ip-results-batch-${{ matrix.batch_index }}
+        path: ip_results_batch_${{ matrix.batch_index }}/
+        retention-days: 7
+
+  merge-results:
+    runs-on: ubuntu-latest
+    needs: ip-test
+    if: always()
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install aiohttp
+
+    - name: 下载所有批次结果
+      uses: actions/download-artifact@v4
+      with:
+        path: downloaded_results
+        pattern: ip-results-*
+        merge-multiple: true
+
+    - name: 合并批次结果
+      run: |
+        # 创建统一目录结构
+        mkdir -p ip_results
+        
+        # 复制所有批次结果
+        for batch_dir in downloaded_results/ip-results-batch-*; do
+          if [ -d "$batch_dir" ]; then
+            cp -r "$batch_dir"/* ip_results/ 2>/dev/null || true
+          fi
+        done
+        
+        # 运行合并脚本
+        python merge_results.py --input ip_results --output merged_results
+
+    - name: 上传合并结果
+      uses: actions/upload-artifact@v4
+      with:
+        name: merged-ip-results
+        path: merged_results/
+        retention-days: 30
+
+    - name: 显示汇总信息
+      run: |
+        echo "📊 合并结果汇总:"
+        if [ -f "merged_results/summary.txt" ]; then
+          cat merged_results/summary.txt
+        else
+          echo "未找到汇总文件"
+        fi
