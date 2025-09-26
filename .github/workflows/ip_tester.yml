@@ -44,20 +44,9 @@ jobs:
     - name: Run IP tester with parameters
       run: |
         # 构建参数
-        TARGET_COUNTRIES="${{ github.event.inputs.target_countries }}"
-        MIN_IPS_PER_COUNTRY="${{ github.event.inputs.min_ips_per_country }}"
-        MAX_CONCURRENT="${{ github.event.inputs.max_concurrent }}"
-        
-        # 对于定时运行，使用默认值
-        if [ -z "$TARGET_COUNTRIES" ]; then
-          TARGET_COUNTRIES="JP,SG,US"
-        fi
-        if [ -z "$MIN_IPS_PER_COUNTRY" ]; then
-          MIN_IPS_PER_COUNTRY="3"
-        fi
-        if [ -z "$MAX_CONCURRENT" ]; then
-          MAX_CONCURRENT="30"
-        fi
+        TARGET_COUNTRIES="${{ github.event.inputs.target_countries || 'JP,SG,US' }}"
+        MIN_IPS_PER_COUNTRY="${{ github.event.inputs.min_ips_per_country || '3' }}"
+        MAX_CONCURRENT="${{ github.event.inputs.max_concurrent || '30' }}"
         
         echo "运行参数："
         echo "目标国家: $TARGET_COUNTRIES"
@@ -65,29 +54,14 @@ jobs:
         echo "最大并发数: $MAX_CONCURRENT"
         
         # 运行脚本并传递参数
-        python -c "
-import subprocess
-import sys
-
-# 构建命令行参数
-cmd = ['python', 'ip_tester.py']
-
-# 添加参数
-cmd.extend(['--target-countries', '$TARGET_COUNTRIES'])
-cmd.extend(['--min-ips', '$MIN_IPS_PER_COUNTRY'])
-cmd.extend(['--max-concurrent', '$MAX_CONCURRENT'])
-
-# 运行命令
-result = subprocess.run(cmd)
-sys.exit(result.returncode)
-"
+        python ip_tester.py --target-countries "$TARGET_COUNTRIES" --min-ips "$MIN_IPS_PER_COUNTRY" --max-concurrent "$MAX_CONCURRENT"
     
     - name: Commit and push results
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add country_results/
-        git commit -m "Update IP test results for ${{ github.event.inputs.target_countries || 'JP,SG,US' }} - $(date)" || echo "No changes to commit"
+        git commit -m "Update IP test results for $TARGET_COUNTRIES - $(date)" || echo "No changes to commit"
         git push
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
