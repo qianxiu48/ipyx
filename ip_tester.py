@@ -705,8 +705,7 @@ async def main():
     
     parser.add_argument('--output', type=str, default='ip_results',
                         help='输出目录')
-    parser.add_argument('--batch-index', type=int, default=0,
-                        help='当前批次索引')
+
     
     args = parser.parse_args()
     
@@ -748,48 +747,35 @@ async def main():
             print(f"📊 应用最大IP限制: {args.max_ips}")
             ips = ips[:args.max_ips]
         
-        # 分批处理逻辑
+        # 自动分批处理逻辑
         if args.batch_size > 0:
             total_batches = (len(ips) + args.batch_size - 1) // args.batch_size
+            all_results = []
             
-            if args.batch_index >= total_batches:
-                print(f"❌ 批次索引 {args.batch_index} 超出范围，总批次: {total_batches}")
-                return
+            for batch_index in range(total_batches):
+                start_idx = batch_index * args.batch_size
+                end_idx = min(start_idx + args.batch_size, len(ips))
+                batch_ips = ips[start_idx:end_idx]
+                
+                print(f"\n📦 处理批次: 第 {batch_index + 1}/{total_batches} 批")
+                print(f"📊 处理IP范围: {start_idx + 1}-{end_idx} (共{len(batch_ips)}个)")
+                
+                # 测试当前批次的IP
+                batch_results = await tester.test_ips(batch_ips)
+                all_results.extend(batch_results)
+                
+                # 检查是否已达到目标数量
+                if tester._should_stop_testing('US'):  # 假设主要测试US
+                    print(f"✅ 已达到目标数量，停止测试")
+                    break
             
-            start_idx = args.batch_index * args.batch_size
-            end_idx = min(start_idx + args.batch_size, len(ips))
-            batch_ips = ips[start_idx:end_idx]
-            
-            print(f"📦 分批处理: 第 {args.batch_index + 1}/{total_batches} 批")
-            print(f"📊 处理IP范围: {start_idx + 1}-{end_idx} (共{len(batch_ips)}个)")
-            
-            # 在GitHub Actions环境中，禁用停止条件，运行所有IP
-            import os
-            if os.environ.get('GITHUB_ACTIONS') == 'true':
-                print("🔧 GitHub Actions环境: 禁用停止条件，运行所有批次IP")
-                # 临时禁用停止条件
-                original_should_stop = tester._should_stop_testing
-                tester._should_stop_testing = lambda country_code: False
-            
-            # 测试当前批次的IP
-            results = await tester.test_ips(batch_ips)
-            
-            # 恢复原始停止条件函数
-            if os.environ.get('GITHUB_ACTIONS') == 'true':
-                tester._should_stop_testing = original_should_stop
+            results = all_results
         else:
             # 不分批，测试所有IP
             results = await tester.test_ips(ips)
         
         # 保存结果
-        if args.batch_size > 0:
-            # 分批运行时，使用批次特定的输出目录
-            batch_output = f"{args.output}_batch_{args.batch_index}"
-            tester.save_results_to_files(batch_output)
-            print(f"💾 批次结果保存到: {batch_output}")
-        else:
-            # 不分批运行时，使用普通输出目录
-            tester.save_results_to_files(args.output)
+        tester.save_results_to_files(args.output)
         
         # 显示统计信息
         print("\n📊 测试统计:")
@@ -801,16 +787,7 @@ async def main():
         total_count = sum(len(r) for r in results.values())
         print(f"总计: {total_count} 个有效IP")
         
-        # 如果是分批运行，显示批次信息
-        if args.batch_size > 0:
-            total_batches = (len(ips) + args.batch_size - 1) // args.batch_size
-            print(f"📦 当前批次: {args.batch_index + 1}/{total_batches}")
-            
-            # 提示如何合并结果
-            if args.batch_index == total_batches - 1:
-                print("\n💡 提示: 所有批次已完成，可以使用合并脚本合并结果")
-            else:
-                print(f"💡 提示: 还有 {total_batches - args.batch_index - 1} 个批次需要运行")
+        print(f"\n✅ 测试完成，结果已保存到: {args.output}")
 
 if __name__ == "__main__":
     asyncio.run(main())
