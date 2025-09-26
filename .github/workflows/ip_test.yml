@@ -96,19 +96,45 @@ jobs:
             find . -type d -name "*result*" -o -name "*ip*" | sort
         fi
 
-    - name: 上传测试结果
-      uses: actions/upload-artifact@v4
-      with:
-        name: ip-results
-        path: ip_results_batch_0
-        retention-days: 7
-      if: always()  # 即使测试失败也上传结果
+    - name: 将结果文件复制到仓库根目录
+      run: |
+        echo "📂 将结果文件复制到仓库根目录..."
+        if [ -d "ip_results_batch_0" ]; then
+          # 复制所有txt文件到仓库根目录
+          cp ip_results_batch_0/*.txt ./
+          echo "✅ 结果文件已复制到仓库根目录"
+          echo "📄 当前目录下的txt文件:"
+          ls -la *.txt
+        else
+          echo "❌ 未找到结果目录"
+        fi
+
+    - name: 提交结果文件到仓库
+      run: |
+        echo "📝 提交结果文件到仓库..."
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # 检查是否有新的txt文件
+        if ls *.txt 1> /dev/null 2>&1; then
+          git add *.txt
+          git commit -m "自动提交IP测试结果 $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "✅ 结果文件已提交到仓库"
+        else
+          echo "❌ 未找到要提交的txt文件"
+        fi
+
+    - name: 推送到远程仓库
+      run: |
+        echo "🚀 推送到远程仓库..."
+        git push origin HEAD:${{ github.ref }}
+        echo "✅ 推送完成"
 
     - name: 显示测试结果
       run: |
         echo "📊 测试结果汇总:"
-        if [ -f "ip_results_batch_0/summary.txt" ]; then
-          cat ip_results_batch_0/summary.txt
+        if [ -f "summary.txt" ]; then
+          cat summary.txt
         else
           echo "未找到汇总文件"
         fi
