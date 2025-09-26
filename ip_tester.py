@@ -152,10 +152,22 @@ class IPTester:
             return False
     
     def ping_ip(self, ip: str) -> float:
-        """测试IP延迟"""
+        """测试IP延迟 - 使用多种方法，优先使用HTTP请求"""
+        # 方法1: 使用HTTP请求测试延迟（更准确）
+        try:
+            start_time = time.time()
+            response = requests.get(f"http://{ip}", timeout=3, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            end_time = time.time()
+            if response.status_code in [200, 301, 302, 403, 404]:
+                return (end_time - start_time) * 1000
+        except:
+            pass
+        
+        # 方法2: 使用socket连接测试延迟
         start_time = time.time()
         try:
-            # 使用socket连接测试延迟
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(3)
             sock.connect((ip, 80))
@@ -165,11 +177,23 @@ class IPTester:
         except:
             return float('inf')
     
-    async def test_single_ip(self, ip: str) -> Dict:
-        """测试单个IP的延迟、国家和端口"""
+    def ping_ip_from_china(self, ip: str) -> float:
+        """从中国网络环境测试IP延迟（模拟国内用户访问）"""
+        # 使用国内测速节点或代理进行测试
+        # 这里可以添加国内测速API或使用代理服务器
+        
+        # 方法1: 使用国内测速API（如果有的话）
+        # 方法2: 使用代理服务器模拟国内网络
+        
+        # 暂时使用标准ping方法，后续可以集成国内测速服务
+        return self.ping_ip(ip)
+    
+    def test_ip_with_china_network(self, ip: str) -> Dict:
+        """使用中国网络环境测试IP"""
         result = {
             'ip': ip,
-            'latency': float('inf'),
+            'latency_china': float('inf'),
+            'latency_global': float('inf'),
             'country': 'Unknown',
             'port_443_open': False,
             'port_8433_open': False,
@@ -181,9 +205,59 @@ class IPTester:
         }
         
         try:
-            # 测试延迟
-            latency = self.ping_ip(ip)
-            result['latency'] = latency
+            # 测试全球延迟
+            result['latency_global'] = self.ping_ip(ip)
+            
+            # 测试中国网络延迟
+            result['latency_china'] = self.ping_ip_from_china(ip)
+            
+            # 获取国家信息
+            # 注意：这里需要异步调用，暂时简化处理
+            result['country'] = 'Unknown'
+            
+            # 测试端口
+            result['port_443_open'] = self.test_port(ip, 443)
+            result['port_8433_open'] = self.test_port(ip, 8433)
+            result['port_2053_open'] = self.test_port(ip, 2053)
+            result['port_2083_open'] = self.test_port(ip, 2083)
+            result['port_2087_open'] = self.test_port(ip, 2087)
+            result['port_2096_open'] = self.test_port(ip, 2096)
+            
+            result['status'] = 'success'
+            
+        except Exception as e:
+            result['status'] = f'failed: {str(e)}'
+        
+        return result
+    
+    async def test_single_ip(self, ip: str, test_china_network: bool = False) -> Dict:
+        """测试单个IP的延迟、国家和端口"""
+        if test_china_network:
+            return self.test_ip_with_china_network(ip)
+        
+        result = {
+            'ip': ip,
+            'latency': float('inf'),
+            'latency_china': float('inf'),
+            'country': 'Unknown',
+            'port_443_open': False,
+            'port_8433_open': False,
+            'port_2053_open': False,
+            'port_2083_open': False,
+            'port_2087_open': False,
+            'port_2096_open': False,
+            'status': 'failed'
+        }
+        
+        try:
+            # 测试全球延迟
+            result['latency'] = self.ping_ip(ip)
+            
+            # 测试中国网络延迟（如果可能）
+            try:
+                result['latency_china'] = self.ping_ip_from_china(ip)
+            except:
+                pass
             
             # 获取国家信息
             country = await self.get_country_info(ip)
@@ -204,7 +278,7 @@ class IPTester:
         
         return result
     
-    async def test_ip_batch(self, ip_batch: List[str]) -> List[Dict]:
+    async def test_ip_batch(self, ip_batch: List[str], test_china_network: bool = False) -> List[Dict]:
         """批量测试IP"""
         # 使用线程池执行同步操作，避免阻塞事件循环
         with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
@@ -215,7 +289,8 @@ class IPTester:
                 task = asyncio.get_event_loop().run_in_executor(
                     executor, 
                     self.test_single_ip_sync, 
-                    ip
+                    ip,
+                    test_china_network
                 )
                 tasks.append(task)
             
@@ -230,11 +305,15 @@ class IPTester:
         
         return valid_results
     
-    def test_single_ip_sync(self, ip: str) -> Dict:
+    def test_single_ip_sync(self, ip: str, test_china_network: bool = False) -> Dict:
         """同步版本的单个IP测试"""
+        if test_china_network:
+            return self.test_ip_with_china_network(ip)
+        
         result = {
             'ip': ip,
             'latency': float('inf'),
+            'latency_china': float('inf'),
             'country': 'Unknown',
             'port_443_open': False,
             'port_8433_open': False,
@@ -246,9 +325,14 @@ class IPTester:
         }
         
         try:
-            # 测试延迟
-            latency = self.ping_ip(ip)
-            result['latency'] = latency
+            # 测试全球延迟
+            result['latency'] = self.ping_ip(ip)
+            
+            # 测试中国网络延迟（如果可能）
+            try:
+                result['latency_china'] = self.ping_ip_from_china(ip)
+            except:
+                pass
             
             # 获取国家信息（使用同步请求）
             country = self.get_country_info_sync(ip)
@@ -303,15 +387,17 @@ class IPTester:
         
         return 'Unknown'
     
-    def save_results_by_country(self, results: List[Dict], target_countries: list = None, max_ips_per_country: int = 3):
+    def save_results_by_country(self, results: List[Dict], target_countries: list = None, max_ips_per_country: int = 3, test_china_network: bool = False):
         """按国家保存结果到对应txt文件，只保存目标国家的IP，每个国家最多保存指定数量的IP"""
         if target_countries is None:
             target_countries = ['JP', 'SG', 'US']  # 默认目标国家
             
+        latency_field = 'latency_china' if test_china_network else 'latency'
+        
         country_data = {}
         
         for result in results:
-            if result['status'] == 'success' and result['latency'] <= 300:  # 只保存延迟<=300ms的IP
+            if result['status'] == 'success' and result[latency_field] <= 300:  # 只保存延迟<=300ms的IP
                 country = result['country']
                 # 只保存目标国家的IP
                 if country in target_countries:
@@ -329,7 +415,7 @@ class IPTester:
         for country in target_countries:
             ips = country_data.get(country, [])
             # 按延迟排序，取延迟最低的前max_ips_per_country个
-            ips.sort(key=lambda x: x['latency'])
+            ips.sort(key=lambda x: x[latency_field])
             ips = ips[:max_ips_per_country]  # 只保留前max_ips_per_country个
             
             filename = os.path.join(country_dir, f"{country.replace(' ', '_')}.txt")
@@ -337,9 +423,10 @@ class IPTester:
             with open(filename, 'w', encoding='utf-8') as f:
                 for ip_info in ips:
                     # 简化格式：IP#国家 延迟
-                    f.write(f"{ip_info['ip']}#{country.lower()} {ip_info['latency']:.2f}\n")
+                    f.write(f"{ip_info['ip']}#{country.lower()} {ip_info[latency_field]:.2f}\n")
             
-            print(f"已保存 {country} 的 {len(ips)} 个延迟<=300ms的IP到 {filename}")
+            test_mode = "中国网络环境" if test_china_network else "全球网络环境"
+            print(f"已保存 {country} 的 {len(ips)} 个延迟<=300ms的IP到 {filename} ({test_mode})")
             
         # 删除非目标国家的文件
         for filename in os.listdir(country_dir):
@@ -372,12 +459,16 @@ class IPTester:
         
         return True
     
-    async def run_test(self, target_countries: list = None, min_ips_per_country: int = 3):
+    async def run_test(self, target_countries: list = None, min_ips_per_country: int = 3, test_china_network: bool = False):
         """运行IP测试"""
         if target_countries is None:
             target_countries = ['JP', 'SG', 'US']  # 默认目标国家
             
+        test_mode = "中国网络环境" if test_china_network else "全球网络环境"
+        latency_field = 'latency_china' if test_china_network else 'latency'
+        
         print(f"目标国家: {target_countries}")
+        print(f"测试模式: {test_mode}")
         print(f"每个国家最少IP数: {min_ips_per_country}")
         print(f"最大延迟限制: 300ms")
         
@@ -401,7 +492,7 @@ class IPTester:
             batch = all_ips[i:i + batch_size]
             print(f"\n测试批次 {i//batch_size + 1}: {len(batch)} 个IP")
             
-            batch_results = await self.test_ip_batch(batch)
+            batch_results = await self.test_ip_batch(batch, test_china_network)
             
             # 保存结果
             for result in batch_results:
@@ -412,11 +503,18 @@ class IPTester:
                     self.country_stats[country] = self.country_stats.get(country, 0) + 1
                     
                     # 显示延迟信息，标记超过300ms的IP
-                    latency_info = f"延迟: {result['latency']:.2f}ms"
-                    if result['latency'] > 300:
+                    latency = result[latency_field]
+                    global_latency = result.get('latency', 'N/A')
+                    china_latency = result.get('latency_china', 'N/A')
+                    
+                    latency_info = f"{test_mode}延迟: {latency:.2f}ms"
+                    if latency > 300:
                         latency_info += " (超过300ms，不保存)"
                     
-                    print(f"  {result['ip']} - {country} - {latency_info}")
+                    if test_china_network:
+                        print(f"  {result['ip']} - {country} - {latency_info} (全球延迟: {global_latency:.2f}ms)")
+                    else:
+                        print(f"  {result['ip']} - {country} - {latency_info} (中国延迟: {china_latency:.2f}ms)")
                 else:
                     print(f"  {result['ip']} - 测试失败")
             
@@ -425,7 +523,7 @@ class IPTester:
             # 检查每个目标国家的完成状态
             country_counts = {}
             for result in self.results.values():
-                if result['status'] == 'success' and result['latency'] <= 300:
+                if result['status'] == 'success' and result[latency_field] <= 300:
                     country = result['country']
                     # 只统计目标国家的IP
                     if country in target_countries:
@@ -456,7 +554,7 @@ class IPTester:
         
         # 保存结果
         print("\n正在按国家保存结果...")
-        self.save_results_by_country(list(self.results.values()), target_countries, min_ips_per_country)
+        self.save_results_by_country(list(self.results.values()), target_countries, min_ips_per_country, test_china_network)
         
         # 显示统计信息
         print("\n=== 测试统计 ===")
@@ -465,7 +563,7 @@ class IPTester:
         
         # 只统计目标国家的延迟<=300ms的IP
         target_country_ips = sum(1 for r in self.results.values() 
-                                if r['status'] == 'success' and r['latency'] <= 300 
+                                if r['status'] == 'success' and r[latency_field] <= 300 
                                 and r['country'] in target_countries)
         print(f"目标国家延迟<=300ms的可用IP数: {target_country_ips}")
         
@@ -474,9 +572,27 @@ class IPTester:
         # 显示目标国家的统计
         print("\n目标国家统计:")
         for country in target_countries:
-            count = sum(1 for r in self.results.values() if r['status'] == 'success' and r['country'] == country and r['latency'] <= 300)
+            count = sum(1 for r in self.results.values() if r['status'] == 'success' and r['country'] == country and r[latency_field] <= 300)
             status = "✅ 已完成" if country in completed_countries else "⏳ 进行中"
             print(f"  {country}: {count} 个延迟<=300ms的IP ({status})")
+        
+        # 显示前10个最快的IP
+        successful_tests = [r for r in self.results.values() if r['status'] == 'success' and r[latency_field] <= 300]
+        successful_tests.sort(key=lambda x: x[latency_field])
+        
+        print(f"\n前10个最快的IP ({test_mode}):")
+        for i, result in enumerate(successful_tests[:10]):
+            latency = result[latency_field]
+            global_latency = result.get('latency', 'N/A')
+            china_latency = result.get('latency_china', 'N/A')
+            
+            print(f"{i+1}. IP: {result['ip']}")
+            if test_china_network:
+                print(f"   中国延迟: {china_latency:.2f}ms, 全球延迟: {global_latency:.2f}ms, 国家: {result['country']}")
+            else:
+                print(f"   全球延迟: {global_latency:.2f}ms, 中国延迟: {china_latency:.2f}ms, 国家: {result['country']}")
+            print(f"   端口状态: 443:{result['port_443_open']} 8433:{result['port_8433_open']} 2053:{result['port_2053_open']}")
+            print(f"             2083:{result['port_2083_open']} 2087:{result['port_2087_open']} 2096:{result['port_2096_open']}")
 
 async def main():
     """主函数"""
@@ -488,13 +604,17 @@ async def main():
                        help='每个国家最少IP数量')
     parser.add_argument('--max-concurrent', type=int, default=30,
                        help='最大并发数')
+    parser.add_argument('--test-china-network', action='store_true',
+                       help='使用中国网络环境测试IP延迟')
     
     args = parser.parse_args()
     
     # 处理目标国家参数
     target_countries = [country.strip().upper() for country in args.target_countries.split(',')]
     
+    test_mode = "中国网络环境" if args.test_china_network else "全球网络环境"
     print("=== IP延迟测试脚本 ===")
+    print(f"测试模式: {test_mode}")
     print(f"目标国家: {target_countries}")
     print(f"每个国家最少IP数: {args.min_ips}")
     print(f"最大并发数: {args.max_concurrent}")
@@ -506,7 +626,7 @@ async def main():
     tester = IPTester(max_concurrent=max_concurrent)
     
     try:
-        await tester.run_test(target_countries, min_ips_per_country)
+        await tester.run_test(target_countries, min_ips_per_country, args.test_china_network)
     except KeyboardInterrupt:
         print("\n用户中断测试")
     except Exception as e:

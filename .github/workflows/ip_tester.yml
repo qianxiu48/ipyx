@@ -51,14 +51,16 @@ jobs:
         TARGET_COUNTRIES="${{ github.event.inputs.target_countries || 'JP,SG,US' }}"
         MIN_IPS_PER_COUNTRY="${{ github.event.inputs.min_ips_per_country || '3' }}"
         MAX_CONCURRENT="${{ github.event.inputs.max_concurrent || '30' }}"
+        TEST_CHINA_NETWORK="${{ github.event.inputs.test_china_network || 'false' }}"
         
         echo "运行参数："
         echo "目标国家: $TARGET_COUNTRIES"
         echo "每个国家最少IP数: $MIN_IPS_PER_COUNTRY"
         echo "最大并发数: $MAX_CONCURRENT"
+        echo "测试中国网络: $TEST_CHINA_NETWORK"
         
         # 运行脚本并传递参数
-        python ip_tester.py --target-countries "$TARGET_COUNTRIES" --min-ips "$MIN_IPS_PER_COUNTRY" --max-concurrent "$MAX_CONCURRENT"
+        python ip_tester.py --target-countries "$TARGET_COUNTRIES" --min-ips "$MIN_IPS_PER_COUNTRY" --max-concurrent "$MAX_CONCURRENT" --test-china-network "$TEST_CHINA_NETWORK"
     
     - name: Commit and push results
       run: |
