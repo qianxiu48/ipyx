@@ -94,6 +94,15 @@ jobs:
 
     - name: 运行IP测试
       run: |
+        # 添加调试信息
+        echo "🔍 当前工作目录:"
+        pwd
+        echo ""
+        echo "📁 运行前目录结构:"
+        ls -la
+        echo ""
+        
+        # 运行IP测试
         python ip_tester.py \
           --countries "${{ github.event.inputs.countries }}" \
           --counts "${{ github.event.inputs.counts }}" \
@@ -103,6 +112,14 @@ jobs:
           --concurrent ${{ github.event.inputs.concurrent }} \
           --ports "${{ github.event.inputs.ports }}" \
           --output ip_results
+        
+        # 检查是否创建了结果目录
+        echo ""
+        echo "📁 运行后目录结构:"
+        ls -la
+        echo ""
+        echo "🔍 查找批次结果目录:"
+        find . -name "*batch*" -type d | sort
 
     - name: 上传测试结果
       uses: actions/upload-artifact@v4
