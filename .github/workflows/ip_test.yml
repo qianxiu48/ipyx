@@ -62,17 +62,21 @@ jobs:
           BATCH_COUNT=$(( (TOTAL_IPS + BATCH_SIZE - 1) / BATCH_SIZE ))
         fi
         
-        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
+        # 生成批次索引数组
+        BATCH_INDICES=$(seq 0 $((BATCH_COUNT - 1)) | tr '\n' ',' | sed 's/,$//')
+        
+        echo "batch_count=[$BATCH_INDICES]" >> $GITHUB_OUTPUT
         echo "📊 总IP数量: $TOTAL_IPS"
         echo "📦 批次大小: $BATCH_SIZE"
         echo "🔢 批次数量: $BATCH_COUNT"
+        echo "📋 批次索引: [$BATCH_INDICES]"
 
   ip-test:
     runs-on: ubuntu-latest
     needs: setup
     strategy:
       matrix:
-        batch_index: ${{ fromJson(format('[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]', needs.setup.outputs.batch_count)) }}
+        batch_index: ${{ fromJson(needs.setup.outputs.batch_count) }}
     
     steps:
     - name: 检出代码
