@@ -6,12 +6,12 @@ on:
       countries:
         description: '目标国家列表（逗号分隔）'
         required: false
-        default: 'US'
+        default: 'US,CN,JP,HK,TW,SG,KR,GB,DE,FR,CA,AU'
         type: string
       counts:
         description: '每个国家的目标IP数量（逗号分隔）'
         required: false
-        default: '3'
+        default: '20,20,20,20,20,20,20,20,20,20,20,20'
         type: string
       batch_size:
         description: '每批处理的IP数量'

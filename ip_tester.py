@@ -365,10 +365,12 @@ class IPTester:
             elif isinstance(result, Exception):
                 continue
         
-        # 按国家分类
+        # 按国家分类 - 保存所有有效的IP，而不仅仅是目标国家的IP
         for result in valid_results:
+            # 保存所有有效的IP，无论是否在目标国家列表中
+            self.results[result.country].append(result)
+            # 只更新目标国家的计数
             if result.country in self.target_countries:
-                self.results[result.country].append(result)
                 self.completed_counts[result.country] = len(self.results[result.country])
         
         print(f"✅ 测试完成，有效结果: {len(valid_results)} 个")
