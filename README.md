@@ -29,14 +29,11 @@ python ip_tester.py --concurrent 20 --ports 443,80
 # 指定输出目录
 python ip_tester.py --output my_results
 
-# 分批运行（每批500个IP，运行第0批）
-python ip_tester.py --batch-size 500 --batch-index 0
-
 # 限制最大IP数量
 python ip_tester.py --max-ips 1000
 
-# 完整的分批运行示例
-python ip_tester.py --countries CN,US --counts 10,5 --batch-size 200 --batch-index 0 --max-ips 1000
+# 完整的轮询测试示例
+python ip_tester.py --countries CN,US --counts 10,5 --max-ips 1000
 ```
 
 ### 参数说明
@@ -46,8 +43,6 @@ python ip_tester.py --countries CN,US --counts 10,5 --batch-size 200 --batch-ind
 - `--concurrent`: 并发测试数量（默认：10）
 - `--ports`: 测试端口，用逗号分隔（默认：443）
 - `--output`: 输出目录（默认：ip_results）
-- `--batch-size`: 分批运行，每批处理的IP数量，0表示不分批（默认：0）
-- `--batch-index`: 当前批次索引，从0开始（默认：0）
 - `--max-ips`: 最大IP数量限制，0表示无限制（默认：0）
 
 ## 输出文件结构
@@ -121,47 +116,28 @@ JP: 8 个IP，平均延迟 95.2ms
 
 ## GitHub Actions 使用
 
-### 自动分批运行
+### 自动轮询测试
 
-项目包含GitHub Actions工作流，可以自动进行分批测试：
+项目包含GitHub Actions工作流，可以自动进行轮询测试：
 
 1. **手动触发**: 在GitHub仓库的Actions页面，选择"IP延迟测试"工作流
 2. **配置参数**: 
    - `countries`: 目标国家列表
    - `counts`: 每个国家的目标IP数量
-   - `batch_size`: 每批处理的IP数量
    - `max_ips`: 最大IP数量限制
    - `concurrent`: 并发测试数量
 
 3. **自动执行**: 工作流会自动：
-   - 计算需要的批次数量
-   - 并行运行所有批次
-   - 合并所有批次结果
-   - 生成最终报告
+   - 运行轮询测试
+   - 生成测试结果
+   - 通过临时分支提交结果
+   - 创建Pull Request
 
 ### 工作流文件
 
 工作流配置文件位于：`.github/workflows/ip_test.yml`
 
-## 结果合并
 
-### 手动合并
-
-如果分批运行后需要手动合并结果：
-
-```bash
-# 合并所有批次结果
-python merge_results.py --input ip_results --output merged_results
-
-# 指定输入输出目录
-python merge_results.py --input my_results --output final_results
-```
-
-### 合并功能
-
-- **自动去重**: 合并时会自动去除重复的IP
-- **延迟排序**: 结果按延迟从低到高排序
-- **汇总报告**: 生成详细的汇总报告
 
 ## 注意事项
 
@@ -170,8 +146,7 @@ python merge_results.py --input my_results --output final_results
 3. **测试时间**: 测试大量IP可能需要较长时间
 4. **结果覆盖**: 每次运行都会覆盖之前的测试结果
 5. **文件编码**: 输出文件使用UTF-8编码
-6. **分批运行**: 大量IP建议使用分批运行，避免超时
-7. **GitHub限制**: GitHub Actions有运行时间限制，分批运行可以避免超时
+6. **GitHub限制**: GitHub Actions有运行时间限制，请合理设置测试参数
 
 ## 依赖安装
 

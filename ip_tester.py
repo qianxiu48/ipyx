@@ -4,6 +4,29 @@ IP延迟测试脚本 - 多国家IP测试与分类存储
 基于Cloudflare IP优选脚本改写
 """
 
+# ==================== 用户配置区域 ====================
+# 请在此处修改以下参数来调整测试行为
+
+# 目标国家列表（逗号分隔）
+TARGET_COUNTRIES = ["US","HK","JP"]
+
+# 每个国家的目标IP数量
+TARGET_COUNTS = {"US": 10,"HK": 3,"JP": 1}
+
+# 测试端口（只测试8443端口）
+TARGET_PORTS = "8443"
+
+# 延迟阈值（毫秒）- 超过此延迟的IP将被过滤
+MAX_LATENCY = 2000
+
+# 并发测试数量
+CONCURRENT_TESTS = 20
+
+# 最大IP数量限制（0表示无限制）
+MAX_IPS = 0
+
+# ==================== 导入依赖 ====================
+
 import asyncio
 import aiohttp
 import json
@@ -35,22 +58,22 @@ class IPResult:
 class IPTester:
     """IP测试器 - 支持多国家测试和条件停止"""
     
-    def __init__(self, target_countries: List[str] = None, max_concurrent: int = 10, 
-                 target_counts: Dict[str, int] = None, target_ports: str = "443"):
-        # 目标国家列表
-        self.target_countries = target_countries or ["US"]
+    def __init__(self, target_countries: List[str] = None, max_concurrent: int = None, 
+                 target_counts: Dict[str, int] = None, target_ports: str = None,
+                 max_latency: int = None, max_ips: int = None):
+        # 使用用户配置或传入参数
+        self.target_countries = target_countries or TARGET_COUNTRIES
+        self.target_counts = target_counts or TARGET_COUNTS
+        self.max_concurrent = max_concurrent or CONCURRENT_TESTS
+        self.max_latency = max_latency or MAX_LATENCY
+        self.max_ips = max_ips or MAX_IPS
         
-        # 每个国家的目标IP数量
-        self.target_counts = target_counts or {country: 10 for country in self.target_countries}
-        
-        # 并发数量
-        self.max_concurrent = max_concurrent
-        
-        # 支持多个端口
-        if ',' in target_ports:
-            self.target_ports = [p.strip() for p in target_ports.split(',')]
+        # 端口配置
+        ports_config = target_ports or TARGET_PORTS
+        if ',' in ports_config:
+            self.target_ports = [p.strip() for p in ports_config.split(',')]
         else:
-            self.target_ports = [target_ports.strip()]
+            self.target_ports = [ports_config.strip()]
 
         # NIP域名
         self.nip_domain = "ip.090227.xyz"
@@ -343,7 +366,7 @@ class IPTester:
             return []
 
     async def test_ips(self, ips: List[str]) -> Dict[str, List[IPResult]]:
-        """测试IP列表"""
+        """测试IP列表，返回当前批次的结果"""
         print(f"🚀 开始测试 {len(ips)} 个IP，并发数: {self.max_concurrent}")
         
         # 创建信号量控制并发
@@ -365,53 +388,84 @@ class IPTester:
             elif isinstance(result, Exception):
                 continue
         
-        # 按国家分类 - 保存所有有效的IP，而不仅仅是目标国家的IP
+        # 创建当前批次的结果字典
+        batch_results = {}
+        
+        # 只保存目标国家的有效IP，并且当某个国家满足条件时不再保存该国家的IP
         for result in valid_results:
-            # 保存所有有效的IP，无论是否在目标国家列表中
-            self.results[result.country].append(result)
-            # 只更新目标国家的计数
+            # 只处理目标国家的IP
             if result.country in self.target_countries:
-                self.completed_counts[result.country] = len(self.results[result.country])
+                # 检查该国家是否已经满足条件
+                if not self._should_stop_testing(result.country):
+                    # 该国家还未满足条件，保存到当前批次结果
+                    if result.country not in batch_results:
+                        batch_results[result.country] = []
+                    batch_results[result.country].append(result)
+                    
+                    # 同时更新测试器的结果
+                    if result.country not in self.results:
+                        self.results[result.country] = []
+                    self.results[result.country].append(result)
+                    # 更新目标国家的计数
+                    self.completed_counts[result.country] = len(self.results[result.country])
         
         print(f"✅ 测试完成，有效结果: {len(valid_results)} 个")
-        return self.results
+        return batch_results
     
     async def test_ip(self, ip: str) -> Optional[IPResult]:
         """测试单个IP"""
         timeout = 5.0
         
-        # 解析IP格式
-        parsed_ip = self._parse_ip_format(ip, int(self.target_ports[0]))
-        if not parsed_ip:
-            return None
+        # 测试所有指定的端口
+        best_result = None
         
-        # 进行测试，最多重试2次
-        for attempt in range(1, 3):
-            result = await self._single_test(parsed_ip['host'], parsed_ip['port'], timeout)
-            if result:
-                # 获取国家代码
-                country_code = await self._get_country_from_colo(result['colo'])
+        for port_str in self.target_ports:
+            try:
+                port = int(port_str)
+            except ValueError:
+                continue
                 
-                # 检查延迟是否超过900ms
-                if result['latency'] > 900:
-                    print(f"⚠️ 跳过延迟过高的IP: {parsed_ip['host']}:{parsed_ip['port']} - {result['latency']:.0f}ms")
-                    return None
-                
-                # 检查是否满足停止条件
-                if self._should_stop_testing(country_code):
-                    return None
-                
-                return IPResult(
-                    ip=parsed_ip['host'],
-                    port=parsed_ip['port'],
-                    latency=result['latency'],
-                    colo=result['colo'],
-                    country=country_code,
-                    type=result['type']
-                )
-            else:
-                if attempt < 2:
-                    await asyncio.sleep(0.1)
+            # 解析IP格式
+            parsed_ip = self._parse_ip_format(ip, port)
+            if not parsed_ip:
+                continue
+            
+            # 进行测试，最多重试2次
+            for attempt in range(1, 3):
+                result = await self._single_test(parsed_ip['host'], parsed_ip['port'], timeout)
+                if result:
+                    # 获取国家代码
+                    country_code = await self._get_country_from_colo(result['colo'])
+                    
+                    # 应用延迟过滤
+                    if result['latency'] > self.max_latency:
+                        continue  # 跳过延迟过高的IP
+                    
+                    # 检查是否应该停止测试该国家的IP
+                    if self._should_stop_testing(country_code):
+                        return None  # 该国家已满足条件，跳过此IP
+                    
+                    # 记录最佳结果（延迟最低的端口）
+                    if best_result is None or result['latency'] < best_result['latency']:
+                        best_result = result
+                        best_result['port'] = port
+                        best_result['country'] = country_code
+                    
+                    # 如果找到一个有效结果，就继续测试下一个端口
+                    break
+                else:
+                    if attempt < 2:
+                        await asyncio.sleep(0.1)
+        
+        if best_result:
+            return IPResult(
+                ip=best_result['ip'],
+                port=best_result['port'],
+                latency=best_result['latency'],
+                colo=best_result['colo'],
+                country=best_result['country'],
+                type=best_result['type']
+            )
         
         return None
     
@@ -568,46 +622,54 @@ class IPTester:
         return colo_to_country.get(colo_code, "UNKNOWN")
     
     def _should_stop_testing(self, country_code: str) -> bool:
-        """检查是否应该停止测试"""
-        # 在GitHub Actions环境中，不根据目标数量停止测试
-        # 而是运行所有批次的IP，让GitHub Actions控制整体流程
-        import os
-        if os.environ.get('GITHUB_ACTIONS') == 'true':
-            return False
+        """检查是否应该停止测试特定国家的IP"""
+        # 如果指定了国家代码，检查该国家是否已满足条件
+        if country_code and country_code in self.target_countries:
+            current_count = len(self.results.get(country_code, []))
+            target_count = self.target_counts.get(country_code, 0)
+            
+            # 如果该国家已经达到目标数量，停止测试该国家的IP
+            if current_count >= target_count:
+                return True
         
-        # 本地运行时，使用原有的停止条件
-        if country_code not in self.target_countries:
-            return False
+        # 如果没有指定国家代码，检查是否所有目标国家都已满足条件
+        if not country_code:
+            for country in self.target_countries:
+                current_count = len(self.results.get(country, []))
+                target_count = self.target_counts.get(country, 0)
+                
+                # 如果某个国家还没有达到目标数量，继续测试
+                if current_count < target_count:
+                    return False
+            
+            # 所有目标国家都满足条件，停止测试
+            print("🎯 所有目标国家已满足条件，停止测试")
+            return True
         
-        current_count = self.completed_counts.get(country_code, 0)
-        target_count = self.target_counts.get(country_code, 0)
-        
-        return current_count >= target_count
+        # 指定了国家代码但该国家未满足条件，继续测试
+        return False
     
     def save_results_to_files(self, output_dir: str = "ip_results") -> None:
         """将结果保存到对应国家的txt文件"""
         # 创建输出目录
         output_path = Path(output_dir)
-        output_path.mkdir(exist_ok=True)
+        output_path.mkdir(parents=True, exist_ok=True)
         
         print(f"💾 正在保存结果到目录: {output_path.absolute()}")
         
-        # 过滤延迟超过900ms的IP
-        filtered_results = {}
-        for country, ip_results in self.results.items():
-            filtered_ips = [r for r in ip_results if r.latency <= 900]
-            if filtered_ips:
-                filtered_results[country] = filtered_ips
-        
-        # 更新结果
-        self.results = filtered_results
-        
-        for country, ip_results in self.results.items():
+        # 只保存目标国家的结果
+        for country in self.target_countries:
+            ip_results = self.results.get(country, [])
             if not ip_results:
                 continue
                 
             # 按延迟排序
             ip_results.sort(key=lambda x: x.latency)
+            
+            # 只保存目标数量的IP
+            target_count = self.target_counts.get(country, 0)
+            if target_count > 0:
+                ip_results = ip_results[:target_count]
             
             # 创建国家文件
             file_path = output_path / f"{country}_ips.txt"
@@ -617,98 +679,50 @@ class IPTester:
                 for result in ip_results:
                     f.write(f"{result.to_display_format()}\n")
             
-            print(f"✅ {country}: 保存了 {len(ip_results)} 个IP到 {file_path.name} (已过滤延迟>900ms的节点)")
+            print(f"✅ {country}: 保存了 {len(ip_results)} 个IP到 {file_path.name}")
         
         # 创建汇总文件
         summary_path = output_path / "summary.txt"
         with open(summary_path, 'w', encoding='utf-8') as f:
             f.write("# IP测试汇总报告\n")
-            f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("# 已过滤延迟超过900ms的节点\n\n")
+            f.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             total_count = 0
-            for country, ip_results in self.results.items():
+            # 只汇总目标国家的结果
+            for country in self.target_countries:
+                ip_results = self.results.get(country, [])
                 if ip_results:
                     count = len(ip_results)
                     total_count += count
                     avg_latency = sum(r.latency for r in ip_results) / count
                     f.write(f"{country}: {count} 个IP，平均延迟 {avg_latency:.1f}ms\n")
             
-            f.write(f"\n总计: {total_count} 个有效IP (延迟≤900ms)")
+            f.write(f"\n总计: {total_count} 个有效IP")
         
         print(f"📊 汇总报告已保存到 {summary_path.name}")
 
-def load_config_from_yaml():
-    """从GitHub Actions配置文件加载参数"""
-    config_path = Path(__file__).parent / ".github" / "workflows" / "ip_test.yml"
-    
-    if not config_path.exists():
-        return None
-    
-    try:
-        import yaml
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
-        
-        # 提取workflow_dispatch的inputs配置
-        inputs = config_data.get('on', {}).get('workflow_dispatch', {}).get('inputs', {})
-        
-        config = {
-            'countries': inputs.get('countries', {}).get('default', 'US'),
-            'counts': inputs.get('counts', {}).get('default', '3'),
-            'batch_size': inputs.get('batch_size', {}).get('default', '20'),
-            'max_ips': inputs.get('max_ips', {}).get('default', '0'),
-            'concurrent': inputs.get('concurrent', {}).get('default', '10'),
-            'ports': inputs.get('ports', {}).get('default', '443')
-        }
-        
-        print(f"📋 从配置文件加载参数: {config}")
-        return config
-        
-    except Exception as e:
-        print(f"⚠️ 加载配置文件失败: {e}")
-        return None
+
 
 async def main():
     """主函数"""
-    # 首先尝试从配置文件加载参数
-    config = load_config_from_yaml()
-    
+    # 始终使用用户配置区域的参数作为默认值
     parser = argparse.ArgumentParser(description='IP延迟测试脚本')
     
-    # 如果配置文件存在，使用配置文件中的默认值
-    if config:
-        parser.add_argument('--countries', type=str, default=config['countries'],
-                            help='目标国家列表，逗号分隔')
-        parser.add_argument('--counts', type=str, default=config['counts'],
-                            help='每个国家的目标IP数量，逗号分隔')
-        parser.add_argument('--concurrent', type=int, default=int(config['concurrent']),
-                            help='并发测试数量')
-        parser.add_argument('--ports', type=str, default=config['ports'],
-                            help='测试端口，逗号分隔')
-        parser.add_argument('--batch-size', type=int, default=int(config['batch_size']),
-                            help='每批处理的IP数量（0表示不分批）')
-        parser.add_argument('--max-ips', type=int, default=int(config['max_ips']),
-                            help='最大IP数量限制（0表示无限制）')
-    else:
-        # 如果配置文件不存在，使用硬编码默认值
-        parser.add_argument('--countries', type=str, default='CN,US,JP,HK,TW,SG,KR',
-                            help='目标国家列表，逗号分隔')
-        parser.add_argument('--counts', type=str, default='10,10,10,10,10,10,10',
-                            help='每个国家的目标IP数量，逗号分隔')
-        parser.add_argument('--concurrent', type=int, default=10,
-                            help='并发测试数量')
-        parser.add_argument('--ports', type=str, default='443',
-                            help='测试端口，逗号分隔')
-        parser.add_argument('--batch-size', type=int, default=0,
-                            help='每批处理的IP数量（0表示不分批）')
-        parser.add_argument('--max-ips', type=int, default=0,
-                            help='最大IP数量限制（0表示无限制）')
+    parser.add_argument('--countries', type=str, default=','.join(TARGET_COUNTRIES),
+                        help='目标国家列表，逗号分隔')
+    parser.add_argument('--counts', type=str, default=','.join(str(TARGET_COUNTS.get(c, 3)) for c in TARGET_COUNTRIES),
+                        help='每个国家的目标IP数量，逗号分隔')
+    parser.add_argument('--concurrent', type=int, default=CONCURRENT_TESTS,
+                        help='并发测试数量')
+    parser.add_argument('--ports', type=str, default=TARGET_PORTS,
+                        help='测试端口，逗号分隔')
+    parser.add_argument('--max-ips', type=int, default=MAX_IPS,
+                        help='最大IP数量限制（0表示无限制）')
+    parser.add_argument('--max-latency', type=int, default=MAX_LATENCY,
+                        help='最大延迟阈值（毫秒）')
     
     parser.add_argument('--output', type=str, default='ip_results',
                         help='输出目录')
-    parser.add_argument('--batch-index', type=int, default=0,
-                        help='当前批次索引')
     
     args = parser.parse_args()
     
@@ -735,7 +749,9 @@ async def main():
         target_countries=countries,
         target_counts=target_counts,
         max_concurrent=args.concurrent,
-        target_ports=args.ports
+        target_ports=args.ports,
+        max_latency=args.max_latency,
+        max_ips=args.max_ips
     ) as tester:
         
         # 获取IP列表
@@ -750,69 +766,68 @@ async def main():
             print(f"📊 应用最大IP限制: {args.max_ips}")
             ips = ips[:args.max_ips]
         
-        # 分批处理逻辑
-        if args.batch_size > 0:
-            total_batches = (len(ips) + args.batch_size - 1) // args.batch_size
-            
-            if args.batch_index >= total_batches:
-                print(f"❌ 批次索引 {args.batch_index} 超出范围，总批次: {total_batches}")
-                return
-            
-            start_idx = args.batch_index * args.batch_size
-            end_idx = min(start_idx + args.batch_size, len(ips))
+        # 分批测试所有IP，每批20个
+        batch_size = 20
+        total_batches = (len(ips) + batch_size - 1) // batch_size
+        
+        print(f"🔄 开始分批测试 {len(ips)} 个IP，共 {total_batches} 批，每批 {batch_size} 个IP")
+        
+        all_results = {}
+        should_stop = False
+        
+        for batch_index in range(total_batches):
+            start_idx = batch_index * batch_size
+            end_idx = min((batch_index + 1) * batch_size, len(ips))
             batch_ips = ips[start_idx:end_idx]
             
-            print(f"📦 分批处理: 第 {args.batch_index + 1}/{total_batches} 批")
-            print(f"📊 处理IP范围: {start_idx + 1}-{end_idx} (共{len(batch_ips)}个)")
+            print(f"\n📦 正在测试第 {batch_index + 1}/{total_batches} 批，本批 {len(batch_ips)} 个IP")
             
-            # 在GitHub Actions环境中，禁用停止条件，运行所有IP
-            import os
-            if os.environ.get('GITHUB_ACTIONS') == 'true':
-                print("🔧 GitHub Actions环境: 禁用停止条件，运行所有批次IP")
-                # 临时禁用停止条件
-                original_should_stop = tester._should_stop_testing
-                tester._should_stop_testing = lambda country_code: False
+            # 测试当前批次
+            batch_results = await tester.test_ips(batch_ips)
             
-            # 测试当前批次的IP
-            results = await tester.test_ips(batch_ips)
+            # 合并结果
+            for country, ip_results in batch_results.items():
+                if country not in all_results:
+                    all_results[country] = []
+                all_results[country].extend(ip_results)
             
-            # 恢复原始停止条件函数
-            if os.environ.get('GITHUB_ACTIONS') == 'true':
-                tester._should_stop_testing = original_should_stop
-        else:
-            # 不分批，测试所有IP
-            results = await tester.test_ips(ips)
+            # 更新测试器的结果，用于条件检查
+            tester.results = all_results
+            
+            # 检查是否满足停止条件
+            should_stop = tester._should_stop_testing("")
+            
+            current_total = sum(len(r) for r in all_results.values())
+            print(f"✅ 第 {batch_index + 1} 批测试完成，当前累计有效IP: {current_total}")
+            
+            # 显示当前各国家进度
+            print("📊 当前进度:")
+            for country in tester.target_countries:
+                current_count = len(all_results.get(country, []))
+                target_count = tester.target_counts.get(country, 0)
+                status = "✅" if current_count >= target_count else "⏳"
+                print(f"  {status} {country}: {current_count}/{target_count}")
+            
+            # 如果满足条件，提前停止
+            if should_stop:
+                print(f"🎯 所有目标国家已满足条件，提前停止测试（第 {batch_index + 1} 批）")
+                break
         
         # 保存结果
-        if args.batch_size > 0:
-            # 分批运行时，使用批次特定的输出目录
-            batch_output = f"{args.output}_batch_{args.batch_index}"
-            tester.save_results_to_files(batch_output)
-            print(f"💾 批次结果保存到: {batch_output}")
-        else:
-            # 不分批运行时，使用普通输出目录
-            tester.save_results_to_files(args.output)
+        tester.results = all_results
+        tester.save_results_to_files(args.output)
         
         # 显示统计信息
         print("\n📊 测试统计:")
-        for country, ip_results in results.items():
+        for country in tester.target_countries:
+            ip_results = all_results.get(country, [])
             if ip_results:
                 avg_latency = sum(r.latency for r in ip_results) / len(ip_results)
                 print(f"  {country}: {len(ip_results)} 个IP，平均延迟 {avg_latency:.1f}ms")
         
-        total_count = sum(len(r) for r in results.values())
+        # 只计算目标国家的总IP数
+        total_count = sum(len(all_results.get(country, [])) for country in tester.target_countries)
         print(f"总计: {total_count} 个有效IP")
-        
-        # 如果是分批运行，显示批次信息
-        if args.batch_size > 0:
-            total_batches = (len(ips) + args.batch_size - 1) // args.batch_size
-            print(f"📦 当前批次: {args.batch_index + 1}/{total_batches}")
-            
-            # 提示如何合并结果
-            if args.batch_index == total_batches - 1:
-                print("\n💡 提示: 所有批次已完成，可以使用合并脚本合并结果")
-            else:
-                print(f"💡 提示: 还有 {total_batches - args.batch_index - 1} 个批次需要运行")
 
 if __name__ == "__main__":
     asyncio.run(main())

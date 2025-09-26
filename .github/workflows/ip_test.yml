@@ -1,38 +1,12 @@
 name: IP延迟测试
 
 on:
+  # 定时触发：每天UTC时间00:00（北京时间08:00）运行
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # 允许手动触发
   workflow_dispatch:
-    inputs:
-      countries:
-        description: '目标国家列表（逗号分隔）'
-        required: false
-        default: 'US,CN,JP,HK,TW,SG,KR,GB,DE,FR,CA,AU'
-        type: string
-      counts:
-        description: '每个国家的目标IP数量（逗号分隔）'
-        required: false
-        default: '20,20,20,20,20,20,20,20,20,20,20,20'
-        type: string
-      batch_size:
-        description: '每批处理的IP数量'
-        required: false
-        default: '20'
-        type: number
-      max_ips:
-        description: '最大IP数量限制（0表示无限制）'
-        required: false
-        default: '0'
-        type: number
-      concurrent:
-        description: '并发测试数量'
-        required: false
-        default: '10'
-        type: number
-      ports:
-        description: '测试端口（逗号分隔）'
-        required: false
-        default: '443'
-        type: string
 
 jobs:
   ip-test:
@@ -64,36 +38,25 @@ jobs:
         ls -la
         echo ""
         
-        # 运行IP测试（不使用矩阵，直接运行单个批次）
+        # 运行IP测试（使用脚本默认配置）
         echo "🚀 开始IP测试..."
-        python ip_tester.py \
-          --countries "${{ github.event.inputs.countries }}" \
-          --counts "${{ github.event.inputs.counts }}" \
-          --batch-size ${{ github.event.inputs.batch_size }} \
-          --batch-index 0 \
-          --max-ips ${{ github.event.inputs.max_ips }} \
-          --concurrent ${{ github.event.inputs.concurrent }} \
-          --ports "${{ github.event.inputs.ports }}" \
-          --output ip_results
+        python ip_tester.py --output ip_results
         
         # 检查是否创建了结果目录
         echo ""
         echo "📁 运行后目录结构:"
         ls -la
         echo ""
-        echo "🔍 查找批次结果目录:"
-        find . -name "*batch*" -type d | sort
-        echo ""
-        echo "🔍 详细检查ip_results_batch_0目录:"
-        if [ -d "ip_results_batch_0" ]; then
-            echo "✅ ip_results_batch_0目录存在"
+        echo "🔍 详细检查ip_results目录:"
+        if [ -d "ip_results" ]; then
+            echo "✅ ip_results目录存在"
             echo "📂 目录内容:"
-            ls -la ip_results_batch_0/
+            ls -la ip_results/
             echo ""
             echo "📄 文件列表:"
-            find ip_results_batch_0 -type f -name "*.txt" | head -20
+            find ip_results -type f -name "*.txt" | head -20
         else
-            echo "❌ ip_results_batch_0目录不存在"
+            echo "❌ ip_results目录不存在"
             echo "🔍 查找所有可能的结果目录:"
             find . -type d -name "*result*" -o -name "*ip*" | sort
         fi
@@ -101,9 +64,9 @@ jobs:
     - name: 将结果文件复制到仓库根目录
       run: |
         echo "📂 将结果文件复制到仓库根目录..."
-        if [ -d "ip_results_batch_0" ]; then
+        if [ -d "ip_results" ]; then
           # 复制所有txt文件到仓库根目录
-          cp ip_results_batch_0/*.txt ./
+          cp ip_results/*.txt ./
           echo "✅ 结果文件已复制到仓库根目录"
           echo "📄 当前目录下的txt文件:"
           ls -la *.txt
