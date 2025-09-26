@@ -127,6 +127,8 @@ jobs:
     - name: 推送到远程仓库
       run: |
         echo "🚀 推送到远程仓库..."
+        # 使用GitHub Token进行推送
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         git push origin HEAD:${{ github.ref }}
         echo "✅ 推送完成"
 
