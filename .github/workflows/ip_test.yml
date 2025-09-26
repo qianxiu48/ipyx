@@ -81,6 +81,20 @@ jobs:
         echo ""
         echo "🔍 查找批次结果目录:"
         find . -name "*batch*" -type d | sort
+        echo ""
+        echo "🔍 详细检查ip_results_batch_0目录:"
+        if [ -d "ip_results_batch_0" ]; then
+            echo "✅ ip_results_batch_0目录存在"
+            echo "📂 目录内容:"
+            ls -la ip_results_batch_0/
+            echo ""
+            echo "📄 文件列表:"
+            find ip_results_batch_0 -type f -name "*.txt" | head -20
+        else
+            echo "❌ ip_results_batch_0目录不存在"
+            echo "🔍 查找所有可能的结果目录:"
+            find . -type d -name "*result*" -o -name "*ip*" | sort
+        fi
 
     - name: 上传测试结果
       uses: actions/upload-artifact@v4
