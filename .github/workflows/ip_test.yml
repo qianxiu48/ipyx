@@ -126,13 +126,39 @@ jobs:
           echo "❌ 未找到要提交的txt文件"
         fi
 
-    - name: 推送到远程仓库
+    - name: 推送到临时分支
       run: |
-        echo "🚀 推送到远程仓库..."
+        echo "🚀 推送到临时分支..."
+        # 创建临时分支名
+        BRANCH_NAME="ip-results-$(date +%Y%m%d-%H%M%S)"
+        
+        # 切换到临时分支
+        git checkout -b $BRANCH_NAME
+        
         # 使用GitHub Token进行推送
         git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-        git push origin HEAD:${{ github.ref }}
-        echo "✅ 推送完成"
+        git push origin $BRANCH_NAME
+        echo "✅ 已推送到临时分支: $BRANCH_NAME"
+        
+        # 保存分支名供后续使用
+        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+
+    - name: 创建Pull Request
+      if: always()
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: ${{ env.BRANCH_NAME }}
+        base: master
+        title: "自动提交IP测试结果 $(date +'%Y-%m-%d %H:%M:%S')"
+        body: |
+          本次IP测试结果已生成，包含以下文件：
+          - summary.txt: 测试汇总报告
+          - 各国家IP列表文件
+          
+          请合并此PR以更新主分支中的测试结果。
+        commit-message: "自动提交IP测试结果"
+        delete-branch: true
 
     - name: 显示测试结果
       run: |
