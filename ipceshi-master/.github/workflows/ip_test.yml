@@ -1,0 +1,138 @@
+name: IP延迟测试
+
+on:
+  # 定时触发：每天UTC时间00:00（北京时间08:00）运行
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  ip-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install aiohttp
+
+    - name: 运行IP测试
+      run: |
+        # 添加调试信息
+        echo "🔍 当前工作目录:"
+        pwd
+        echo ""
+        echo "📁 运行前目录结构:"
+        ls -la
+        echo ""
+        
+        # 运行IP测试（使用脚本默认配置）
+        echo "🚀 开始IP测试..."
+        python ip_tester.py --output ip_results
+        
+        # 检查是否创建了结果目录
+        echo ""
+        echo "📁 运行后目录结构:"
+        ls -la
+        echo ""
+        echo "🔍 详细检查ip_results目录:"
+        if [ -d "ip_results" ]; then
+            echo "✅ ip_results目录存在"
+            echo "📂 目录内容:"
+            ls -la ip_results/
+            echo ""
+            echo "📄 文件列表:"
+            find ip_results -type f -name "*.txt" | head -20
+        else
+            echo "❌ ip_results目录不存在"
+            echo "🔍 查找所有可能的结果目录:"
+            find . -type d -name "*result*" -o -name "*ip*" | sort
+        fi
+
+    - name: 将结果文件复制到仓库根目录
+      run: |
+        echo "📂 将结果文件复制到仓库根目录..."
+        if [ -d "ip_results" ]; then
+          # 复制所有txt文件到仓库根目录
+          cp ip_results/*.txt ./
+          echo "✅ 结果文件已复制到仓库根目录"
+          echo "📄 当前目录下的txt文件:"
+          ls -la *.txt
+        else
+          echo "❌ 未找到结果目录"
+        fi
+
+    - name: 提交结果文件到仓库
+      run: |
+        echo "📝 提交结果文件到仓库..."
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # 检查是否有新的txt文件
+        if ls *.txt 1> /dev/null 2>&1; then
+          git add *.txt
+          git commit -m "自动提交IP测试结果 $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "✅ 结果文件已提交到仓库"
+        else
+          echo "❌ 未找到要提交的txt文件"
+        fi
+
+    - name: 推送到临时分支
+      run: |
+        echo "🚀 推送到临时分支..."
+        # 创建临时分支名
+        BRANCH_NAME="ip-results-$(date +%Y%m%d-%H%M%S)"
+        
+        # 切换到临时分支
+        git checkout -b $BRANCH_NAME
+        
+        # 使用GitHub Token进行推送
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+        git push origin $BRANCH_NAME
+        echo "✅ 已推送到临时分支: $BRANCH_NAME"
+        
+        # 保存分支名供后续使用
+        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+
+    - name: 创建Pull Request
+      if: always()
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: ${{ env.BRANCH_NAME }}
+        base: master
+        title: "自动提交IP测试结果 $(date +'%Y-%m-%d %H:%M:%S')"
+        body: |
+          本次IP测试结果已生成，包含以下文件：
+          - summary.txt: 测试汇总报告
+          - 各国家IP列表文件
+          
+          请合并此PR以更新主分支中的测试结果。
+        commit-message: "自动提交IP测试结果"
+        delete-branch: true
+        labels: |
+          automated
+          ip-test
+
+    - name: 显示测试结果
+      run: |
+        echo "📊 测试结果汇总:"
+        if [ -f "summary.txt" ]; then
+          cat summary.txt
+        else
+          echo "未找到汇总文件"
+        fi
