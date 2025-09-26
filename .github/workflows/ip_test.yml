@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     
     steps:
     - name: 检出代码
@@ -87,6 +88,8 @@ jobs:
           echo "✅ 结果文件已提交到仓库"
         else
           echo "❌ 未找到要提交的txt文件"
+          # 如果没有结果文件，创建一个空的提交来避免后续步骤失败
+          git commit --allow-empty -m "IP测试运行完成，但未生成新结果文件 $(date +'%Y-%m-%d %H:%M:%S')"
         fi
 
     - name: 推送到临时分支
@@ -112,7 +115,7 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         branch: ${{ env.BRANCH_NAME }}
-        base: master
+        base: main
         title: "自动提交IP测试结果 $(date +'%Y-%m-%d %H:%M:%S')"
         body: |
           本次IP测试结果已生成，包含以下文件：
