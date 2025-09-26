@@ -108,7 +108,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ip-results-batch-${{ matrix.batch_index }}
-        path: ip_results_batch_${{ matrix.batch_index }}/
+        path: ip_results_batch_${{ matrix.batch_index }}
         retention-days: 7
 
   merge-results:
@@ -142,19 +142,33 @@ jobs:
         # 创建统一目录结构
         mkdir -p ip_results
         
+        # 检查下载的工件目录结构
+        echo "📁 下载的工件目录结构:"
+        find downloaded_results -type d -name "*batch*" | head -20
+        
         # 复制所有批次结果到正确的目录结构
         for batch_dir in downloaded_results/ip-results-batch-*; do
           if [ -d "$batch_dir" ]; then
             batch_index=$(basename "$batch_dir" | sed 's/ip-results-batch-//')
             target_dir="ip_results/ip_results_batch_$batch_index"
             mkdir -p "$target_dir"
+            
+            # 检查源目录内容
+            echo "📂 源目录 $batch_dir 内容:"
+            ls -la "$batch_dir" || echo "无法列出目录内容"
+            
+            # 复制文件
             cp -r "$batch_dir"/* "$target_dir"/ 2>/dev/null || true
             echo "✅ 复制批次 $batch_index 结果到 $target_dir"
+            
+            # 检查目标目录内容
+            echo "📂 目标目录 $target_dir 内容:"
+            ls -la "$target_dir" || echo "目标目录为空"
           fi
         done
         
         # 检查目录结构
-        echo "📁 当前目录结构:"
+        echo "📁 最终目录结构:"
         find ip_results -type f -name "*.txt" | head -20
         
         # 运行合并脚本
