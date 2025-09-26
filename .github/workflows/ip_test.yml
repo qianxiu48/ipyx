@@ -51,15 +51,24 @@ jobs:
     - name: 计算批次数量
       id: calc_batches
       run: |
-        # 模拟获取IP数量（实际运行时会动态计算）
-        # 这里使用固定值来演示
-        TOTAL_IPS=2000
+        # 使用较小的批次数量进行测试
+        # 实际IP数量会在运行时动态获取，这里使用固定值
+        TOTAL_IPS=1000  # 减少总IP数量
         BATCH_SIZE=${{ github.event.inputs.batch_size }}
+        
+        # 限制最大批次数量
+        MAX_BATCHES=10
         
         if [ $BATCH_SIZE -eq 0 ]; then
           BATCH_COUNT=1
         else
           BATCH_COUNT=$(( (TOTAL_IPS + BATCH_SIZE - 1) / BATCH_SIZE ))
+        fi
+        
+        # 限制批次数量不超过最大值
+        if [ $BATCH_COUNT -gt $MAX_BATCHES ]; then
+          BATCH_COUNT=$MAX_BATCHES
+          echo "⚠️ 批次数量超过限制，调整为 $MAX_BATCHES"
         fi
         
         # 生成批次索引数组
@@ -70,6 +79,7 @@ jobs:
         echo "📦 批次大小: $BATCH_SIZE"
         echo "🔢 批次数量: $BATCH_COUNT"
         echo "📋 批次索引: [$BATCH_INDICES]"
+        echo "💡 提示: 限制最大批次数量为 $MAX_BATCHES 以测试合并功能"
 
   ip-test:
     runs-on: ubuntu-latest
@@ -131,7 +141,7 @@ jobs:
   merge-results:
     runs-on: ubuntu-latest
     needs: ip-test
-    if: always()
+    if: always() && needs.ip-test.result == 'success'
     
     steps:
     - name: 检出代码
