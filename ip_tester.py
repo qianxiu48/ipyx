@@ -128,8 +128,9 @@ class IPTester:
         """获取NIP域名"""
         import os
         if os.environ.get('GITHUB_ACTIONS') == 'true':
-            print("检测到GitHub Actions环境，使用预设域名")
-            self.nip_domain = "nip.lfree.org"
+            print("检测到GitHub Actions环境，使用GitHub优化域名")
+            # GitHub Actions环境专用域名，确保可访问性
+            self.nip_domain = "ip.sb"
             return
 
         # 备用域名列表
@@ -141,22 +142,47 @@ class IPTester:
         """获取所有IP源的IP列表"""
         all_ips = set()
         
-        for ip_source in self.ip_sources:
-            print(f"正在获取 {ip_source} IP列表...")
+        # 如果是GitHub Actions环境，使用优化的IP源列表
+        import os
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            print("🔧 GitHub Actions环境：使用优化IP源列表")
+            # 在GitHub环境中，优先使用可靠且可访问的IP源
+            github_sources = ["official", "as13335", "as209242", "cm"]
             
-            try:
-                ips = await self._get_ips_from_source(ip_source)
-                all_ips.update(ips)
-                print(f"✅ 从 {ip_source} 获取到 {len(ips)} 个IP，总计 {len(all_ips)} 个IP")
+            for ip_source in github_sources:
+                print(f"正在获取 {ip_source} IP列表...")
                 
-                # 如果已经获取到足够多的IP，可以提前停止
-                if len(all_ips) > 10000:
-                    print("⚠️ IP数量已超过10000，停止获取更多IP")
-                    break
+                try:
+                    ips = await self._get_ips_from_source(ip_source)
+                    all_ips.update(ips)
+                    print(f"✅ 从 {ip_source} 获取到 {len(ips)} 个IP，总计 {len(all_ips)} 个IP")
                     
-            except Exception as e:
-                print(f"❌ 获取 {ip_source} IP失败: {e}")
-                continue
+                    # 如果已经获取到足够多的IP，可以提前停止
+                    if len(all_ips) > 5000:
+                        print("⚠️ IP数量已超过5000，停止获取更多IP")
+                        break
+                        
+                except Exception as e:
+                    print(f"❌ 获取 {ip_source} IP失败: {e}")
+                    continue
+        else:
+            # 本地环境使用完整IP源列表
+            for ip_source in self.ip_sources:
+                print(f"正在获取 {ip_source} IP列表...")
+                
+                try:
+                    ips = await self._get_ips_from_source(ip_source)
+                    all_ips.update(ips)
+                    print(f"✅ 从 {ip_source} 获取到 {len(ips)} 个IP，总计 {len(all_ips)} 个IP")
+                    
+                    # 如果已经获取到足够多的IP，可以提前停止
+                    if len(all_ips) > 10000:
+                        print("⚠️ IP数量已超过10000，停止获取更多IP")
+                        break
+                        
+                except Exception as e:
+                    print(f"❌ 获取 {ip_source} IP失败: {e}")
+                    continue
         
         # 转换为列表并打乱顺序
         ip_list = list(all_ips)
