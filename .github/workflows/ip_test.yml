@@ -30,7 +30,6 @@ jobs:
         pip install aiohttp
 
     - name: 运行IP测试
-      timeout-minutes: 20
       run: |
         # 添加调试信息
         echo "🔍 当前工作目录:"
@@ -49,7 +48,7 @@ jobs:
         
         # 添加超时控制和错误处理
         set +e  # 允许命令失败而不停止脚本
-        timeout 18m python ip_tester.py --output ip_results
+        python ip_tester.py --output ip_results
         exit_code=$?
         set -e  # 恢复错误处理
         
