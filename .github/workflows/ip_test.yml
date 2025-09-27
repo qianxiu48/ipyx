@@ -94,39 +94,14 @@ jobs:
           git commit --allow-empty -m "IP测试运行完成，但未生成新结果文件 $(date +'%Y-%m-%d %H:%M:%S')"
         fi
 
-    - name: 推送到临时分支
+    - name: 直接推送到main分支
       run: |
-        echo "🚀 推送到临时分支..."
-        # 创建临时分支名
-        BRANCH_NAME="ip-results-$(date +%Y%m%d-%H%M%S)"
-        
-        # 切换到临时分支
-        git checkout -b $BRANCH_NAME
+        echo "🚀 直接推送到main分支..."
         
         # 使用GitHub Token进行推送
         git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-        git push origin $BRANCH_NAME
-        echo "✅ 已推送到临时分支: $BRANCH_NAME"
-        
-        # 保存分支名供后续使用
-        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
-
-    - name: 创建Pull Request
-      if: always()
-      uses: peter-evans/create-pull-request@v5
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        branch: ${{ env.BRANCH_NAME }}
-        base: main
-        title: "自动提交IP测试结果 $(date +'%Y-%m-%d %H:%M:%S')"
-        body: |
-          本次IP测试结果已生成，包含以下文件：
-          - summary.txt: 测试汇总报告
-          - 各国家IP列表文件
-          
-          请合并此PR以更新主分支中的测试结果。
-        commit-message: "自动提交IP测试结果"
-        delete-branch: true
+        git push origin main
+        echo "✅ 已直接推送到main分支"
 
     - name: 显示测试结果
       run: |
