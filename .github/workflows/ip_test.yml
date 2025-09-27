@@ -59,11 +59,20 @@ jobs:
         mkdir -p ip_results
         echo "✅ 已创建ip_results目录"
         
+        # 添加更多调试信息
+        echo "🔍 检查Python环境:"
+        python --version
+        echo ""
+        echo "🔍 检查依赖安装:"
+        pip list | grep aiohttp
+        echo ""
+        
         # 添加超时控制和错误处理
         set +e  # 允许命令失败而不停止脚本
         
         # 使用优化的参数配置，增加超时时间和调试信息
         # 添加timeout命令，防止脚本无限期卡住
+        echo "⏰ 开始执行IP测试脚本（25分钟超时）..."
         timeout 25m python ip_tester.py --output ip_results --max-ips 2000 --concurrent 10 --max-latency 3000
         exit_code=$?
         set -e  # 恢复错误处理

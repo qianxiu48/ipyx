@@ -104,7 +104,10 @@ class IPTester:
     async def __aenter__(self):
         """异步上下文管理器入口"""
         try:
+            print("🔧 开始异步上下文管理器初始化...")
+            
             # 先获取域名，避免在session创建过程中出现网络问题
+            print("📡 获取NIP域名...")
             await self._get_nip_domain()
             
             # 为GitHub环境优化连接器配置
@@ -112,7 +115,10 @@ class IPTester:
             github_env = os.environ.get('GITHUB_ACTIONS')
             runner_env = os.environ.get('RUNNER_ENVIRONMENT')
             
+            print(f"🔍 环境检测: GITHUB_ACTIONS={github_env}, RUNNER_ENVIRONMENT={runner_env}")
+            
             if github_env == 'true' or runner_env == 'github-hosted':
+                print("🔧 GitHub环境：使用优化连接器配置")
                 # GitHub环境使用更保守的连接器配置
                 connector = aiohttp.TCPConnector(
                     ssl=False,
@@ -123,6 +129,7 @@ class IPTester:
                 )
                 timeout = aiohttp.ClientTimeout(total=15)  # 增加超时时间
             else:
+                print("🔧 本地环境：使用标准连接器配置")
                 # 本地环境使用标准配置
                 connector = aiohttp.TCPConnector(
                     ssl=False,
@@ -133,11 +140,13 @@ class IPTester:
                 )
                 timeout = aiohttp.ClientTimeout(total=10)
 
+            print("🔧 创建aiohttp会话...")
             self.session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=connector,
                 trust_env=True
             )
+            print("✅ 异步上下文管理器初始化完成")
             return self
         except Exception as e:
             print(f"❌ 异步上下文管理器初始化失败: {e}")
@@ -172,6 +181,7 @@ class IPTester:
     
     async def get_all_ips(self) -> List[str]:
         """获取所有IP源的IP列表"""
+        print("🔧 开始获取所有IP列表...")
         all_ips = set()
         
         # 增强GitHub环境检测
@@ -179,13 +189,16 @@ class IPTester:
         github_env = os.environ.get('GITHUB_ACTIONS')
         runner_env = os.environ.get('RUNNER_ENVIRONMENT')
         
+        print(f"🔍 IP获取环境检测: GITHUB_ACTIONS={github_env}, RUNNER_ENVIRONMENT={runner_env}")
+        
         if github_env == 'true' or runner_env == 'github-hosted':
             print("🔧 GitHub Actions环境：使用优化IP源列表")
             # 在GitHub环境中，优先使用可靠且可访问的IP源
             github_sources = ["official", "as13335", "as209242", "cm"]
+            print(f"📋 GitHub环境IP源列表: {github_sources}")
             
             for ip_source in github_sources:
-                print(f"正在获取 {ip_source} IP列表...")
+                print(f"📥 正在获取 {ip_source} IP列表...")
                 
                 try:
                     ips = await self._get_ips_from_source(ip_source)
@@ -229,6 +242,8 @@ class IPTester:
     async def _get_ips_from_source(self, ip_source: str) -> List[str]:
         """从指定源获取IP列表"""
         try:
+            print(f"🔍 开始从 {ip_source} 源获取IP列表...")
+            
             # 为GitHub Actions环境添加超时控制
             import os
             github_env = os.environ.get('GITHUB_ACTIONS')
@@ -236,6 +251,7 @@ class IPTester:
             
             # GitHub环境使用更短的超时时间
             timeout_seconds = 10 if (github_env == 'true' or runner_env == 'github-hosted') else 30
+            print(f"⏰ {ip_source} 源超时设置: {timeout_seconds}秒")
             
             if ip_source == "cfip":
                 url = "https://raw.githubusercontent.com/qianxiu203/cfipcaiji/refs/heads/main/ip.txt"
