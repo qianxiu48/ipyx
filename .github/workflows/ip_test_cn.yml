@@ -1,0 +1,131 @@
+name: IP延迟测试（中国网络模拟）
+
+on:
+  # 定时触发：每3小时运行一次
+  schedule:
+    - cron: '0 */3 * * *'
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  ip-test:
+    name: 运行 IP 测试 (${{ matrix.region }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [CN]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install aiohttp
+
+      - name: 配置中国网络代理（可选）
+        if: matrix.region == 'CN'
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.CN_HTTP_PROXY }}" ]; then
+            echo "HTTP_PROXY=${{ secrets.CN_HTTP_PROXY }}" >> $GITHUB_ENV
+            echo "HTTPS_PROXY=${{ secrets.CN_HTTPS_PROXY }}" >> $GITHUB_ENV
+            echo "NO_PROXY=localhost,127.0.0.1,::1" >> $GITHUB_ENV
+            echo "✅ 已为 CN 区域设置代理环境变量"
+          else
+            echo "⚠️ 未提供 CN_HTTP_PROXY/CN_HTTPS_PROXY secrets，按直连方式运行（可能无法真实模拟中国网络）"
+          fi
+
+      - name: 运行IP测试（${{ matrix.region }}）
+        shell: bash
+        run: |
+          echo "🚀 开始 ${GITHUB_JOB} - 区域: ${{ matrix.region }}"
+          mkdir -p ip_results/${{ matrix.region }}
+          # 输出调试信息：显示将使用的代理
+          echo "HTTP_PROXY=$HTTP_PROXY"
+          echo "HTTPS_PROXY=$HTTPS_PROXY"
+
+          # 运行脚本（代码已支持 trust_env=True，能读取代理环境变量）
+          python ip_tester.py --output ip_results/${{ matrix.region }}
+
+          echo "📁 生成的文件:"
+          ls -la ip_results/${{ matrix.region }} || true
+
+      - name: 上传结果为 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ip_results_${{ matrix.region }}
+          path: ip_results/${{ matrix.region }}/*.txt
+          if-no-files-found: warn
+
+  commit-results:
+    name: 汇总并提交结果到 main
+    runs-on: ubuntu-latest
+    needs: ip-test
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载所有结果 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          # 下载到该目录，按 artifact 名称分子目录保存
+          path: ip_results_artifacts
+
+      - name: 合并结果到仓库目录
+        shell: bash
+        run: |
+          set -e
+          mkdir -p ip_results
+          if [ -d ip_results_artifacts ]; then
+            echo "📦 合并 Artifact 到 ip_results/"
+            for d in ip_results_artifacts/*; do
+              [ -d "$d" ] || continue
+              base=$(basename "$d")            # e.g. ip_results_CN
+              region=${base#ip_results_}        # -> CN
+              mkdir -p ip_results/${region}
+              cp -f "$d"/*.txt ip_results/${region}/ 2>/dev/null || true
+            done
+          else
+            echo "⚠️ 未找到任何 Artifact"
+          fi
+
+          echo "📁 合并后的目录结构："
+          find ip_results -maxdepth 2 -type f -name "*.txt" | sort || true
+
+      - name: 提交并推送到 main
+        shell: bash
+        run: |
+          echo "📝 提交结果文件到仓库..."
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # 添加结果文件
+          git add ip_results/**/*.txt || true
+          git add ip_results/*.txt || true
+
+          if git diff --cached --quiet; then
+            echo "ℹ️ 没有需要提交的更改"
+          else
+            git commit -m "[CI] 中国网络模拟IP测试结果更新 $(date +'%Y-%m-%d %H:%M:%S')"
+            git push origin main
+            echo "✅ 已推送到 main 分支"
+          fi
+
+      - name: 展示汇总
+        shell: bash
+        run: |
+          echo "📊 汇总:"
+          find ip_results -type f -name "*.txt" | sort | xargs -I{} sh -c 'echo "--- {}"; head -n 5 "{}"; echo' || echo "未找到结果文件"
+

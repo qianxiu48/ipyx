@@ -11,7 +11,7 @@ IP延迟测试脚本 - 多国家IP测试与分类存储
 TARGET_COUNTRIES = ["US","HK","JP","SG"]
 
 # 每个国家的目标IP数量
-TARGET_COUNTS = {"US": 5,"HK": 6,"JP": 2,"SG": 2}
+TARGET_COUNTS = {"US": 20,"HK": 20,"JP": 5,"SG": 5}
 
 # 测试端口（只测试8443端口）
 TARGET_PORTS = "8443"
@@ -20,7 +20,7 @@ TARGET_PORTS = "8443"
 MAX_LATENCY = 2000
 
 # 并发测试数量
-CONCURRENT_TESTS = 40
+CONCURRENT_TESTS = 30
 
 # 最大IP数量限制（0表示无限制）
 MAX_IPS = 0
@@ -113,7 +113,8 @@ class IPTester:
 
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=10),
-            connector=connector
+            connector=connector,
+            trust_env=True
         )
         await self._get_nip_domain()
         return self
