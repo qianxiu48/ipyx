@@ -770,11 +770,11 @@ async def main():
             print(f"📊 应用最大IP限制: {args.max_ips}")
             ips = ips[:args.max_ips]
         
-        # 分批测试所有IP，每批20个
-        batch_size = 20
+        # 分批测试所有IP，批次大小等于并发测试数量
+        batch_size = args.concurrent
         total_batches = (len(ips) + batch_size - 1) // batch_size
         
-        print(f"🔄 开始分批测试 {len(ips)} 个IP，共 {total_batches} 批，每批 {batch_size} 个IP")
+        print(f"🔄 开始分批测试 {len(ips)} 个IP，共 {total_batches} 批，每批 {batch_size} 个IP（与并发数一致）")
         
         all_results = {}
         should_stop = False
