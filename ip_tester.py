@@ -20,7 +20,7 @@ TARGET_PORTS = "8443"
 MAX_LATENCY = 2000
 
 # 并发测试数量
-CONCURRENT_TESTS = 20
+CONCURRENT_TESTS = 30
 
 # 最大IP数量限制（0表示无限制）
 MAX_IPS = 0
@@ -812,12 +812,18 @@ async def main():
                 status = "✅" if current_count >= target_count else "⏳"
                 print(f"  {status} {country}: {current_count}/{target_count}")
             
+            # 每批测试完成后立即保存结果（实时保存）
+            print(f"💾 实时保存第 {batch_index + 1} 批测试结果...")
+            tester.results = all_results
+            tester.save_results_to_files(args.output)
+            
             # 如果满足条件，提前停止
             if should_stop:
                 print(f"🎯 所有目标国家已满足条件，提前停止测试（第 {batch_index + 1} 批）")
                 break
         
-        # 保存结果
+        # 最终保存结果（确保所有结果都被保存）
+        print("💾 保存最终测试结果...")
         tester.results = all_results
         tester.save_results_to_files(args.output)
         
