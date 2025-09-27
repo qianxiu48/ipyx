@@ -167,6 +167,10 @@ class IPTester:
     async def _get_ips_from_source(self, ip_source: str) -> List[str]:
         """从指定源获取IP列表"""
         try:
+            # 为GitHub Actions环境添加超时控制
+            import os
+            timeout_seconds = 10 if os.environ.get('GITHUB_ACTIONS') == 'true' else 30
+            
             if ip_source == "cfip":
                 url = "https://raw.githubusercontent.com/qianxiu203/cfipcaiji/refs/heads/main/ip.txt"
             elif ip_source == "as13335":
@@ -192,7 +196,7 @@ class IPTester:
             else:  # official
                 url = "https://www.cloudflare.com/ips-v4/"
             
-            async with self.session.get(url) as response:
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as response:
                 if response.status == 200:
                     text = await response.text()
                 else:
