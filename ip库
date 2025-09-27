@@ -1,0 +1,24 @@
+if ip_source == "cfip":
+                url = "https://raw.githubusercontent.com/qianxiu203/cfipcaiji/refs/heads/main/ip.txt"
+            elif ip_source == "as13335":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/13335/ipv4-aggregated.txt"
+            elif ip_source == "as209242":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/209242/ipv4-aggregated.txt"
+            elif ip_source == "as24429":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/24429/ipv4-aggregated.txt"
+            elif ip_source == "as35916":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/35916/ipv4-aggregated.txt"
+            elif ip_source == "as199524":
+                url = "https://raw.githubusercontent.com/ipverse/asn-ip/master/as/199524/ipv4-aggregated.txt"
+            elif ip_source == "cm":
+                url = "https://raw.githubusercontent.com/cmliu/cmliu/main/CF-CIDR.txt"
+            elif ip_source == "bestali":
+                url = "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestAli/bestaliv4.txt"
+            elif ip_source == "bestcfv4":
+                url = "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt"
+            elif ip_source == "bestcfv6":
+                url = "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt"
+            elif ip_source == "proxyip":
+                return await self._get_proxy_ips(self.target_ports[0])
+            else:  # official
+                url = "https://www.cloudflare.com/ips-v4/"

@@ -1,28 +1,20 @@
 # IP延迟测试脚本
 
-基于CM大佬的Cloudflare IP优选脚本改写的多国家IP延迟测试工具。
+## 功能说明
 
-### 基本使用
+这是一个Python脚本，用于测试IP地址的延迟、国家归属和端口可用性。主要功能包括：
+
+## 安装依赖
+
 ```bash
-python ip_tester.py
+pip install -r requirements.txt
 ```
+## 使用方法
 
-### 自定义参数
+1. 安装依赖包
+2. 修改配置文件（如果需要）
+3. 运行脚本：
+
 ```bash
-# 指定目标国家和数量
-python ip_tester.py --countries CN,US,JP --counts 5,10,8
-
-# 指定并发数量和端口
-python ip_tester.py --concurrent 20 --ports 443,80
-
-# 指定输出目录
-python ip_tester.py --output my_results
-
-# 限制最大IP数量
-python ip_tester.py --max-ips 1000
-
-# 完整的轮询测试示例
-python ip_tester.py --countries CN,US --counts 10,5 --max-ips 1000
+python ip_delay_tester.py
 ```
-
-**注意**: 本工具仅供学习和测试使用，请遵守相关法律法规。
