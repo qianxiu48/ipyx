@@ -27,7 +27,6 @@ def test_environment():
     print(f"Python版本: {sys.version}")
     
     # 检查当前工作目录
-    import os
     print(f"当前工作目录: {os.getcwd()}")
     
     # 检查文件是否存在
