@@ -29,7 +29,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install aiohttp
 
+    - name: 环境测试
+      run: |
+        echo "🔧 运行环境测试..."
+        python test_github_env.py
+        echo "✅ 环境测试完成"
+
     - name: 运行IP测试
+      timeout-minutes: 30  # 设置30分钟超时
       run: |
         # 添加调试信息
         echo "🔍 当前工作目录:"
@@ -37,6 +44,12 @@ jobs:
         echo ""
         echo "📁 运行前目录结构:"
         ls -la
+        echo ""
+        
+        # 显示环境变量（调试用）
+        echo "🔧 环境变量检查:"
+        echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
+        echo "RUNNER_ENVIRONMENT: $RUNNER_ENVIRONMENT"
         echo ""
         
         # 运行IP测试（使用GitHub优化配置）
@@ -50,14 +63,15 @@ jobs:
         set +e  # 允许命令失败而不停止脚本
         
         # 使用优化的参数配置，增加超时时间和调试信息
-        python ip_tester.py --output ip_results --max-ips 3000 --concurrent 15 --max-latency 3000
+        # 添加timeout命令，防止脚本无限期卡住
+        timeout 25m python ip_tester.py --output ip_results --max-ips 2000 --concurrent 10 --max-latency 3000
         exit_code=$?
         set -e  # 恢复错误处理
         
         if [ $exit_code -eq 0 ]; then
             echo "✅ IP测试成功完成"
         elif [ $exit_code -eq 124 ]; then
-            echo "⚠️ IP测试超时，但可能已生成部分结果"
+            echo "⚠️ IP测试超时（25分钟），但可能已生成部分结果"
         else
             echo "⚠️ IP测试失败（退出码: $exit_code），但继续执行后续步骤"
         fi

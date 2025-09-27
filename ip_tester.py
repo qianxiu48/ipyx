@@ -103,21 +103,47 @@ class IPTester:
 
     async def __aenter__(self):
         """异步上下文管理器入口"""
-        connector = aiohttp.TCPConnector(
-            ssl=False,
-            limit=100,
-            limit_per_host=50,
-            ttl_dns_cache=300,
-            use_dns_cache=True
-        )
+        try:
+            # 先获取域名，避免在session创建过程中出现网络问题
+            await self._get_nip_domain()
+            
+            # 为GitHub环境优化连接器配置
+            import os
+            github_env = os.environ.get('GITHUB_ACTIONS')
+            runner_env = os.environ.get('RUNNER_ENVIRONMENT')
+            
+            if github_env == 'true' or runner_env == 'github-hosted':
+                # GitHub环境使用更保守的连接器配置
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=20,  # 减少并发连接数
+                    limit_per_host=10,
+                    ttl_dns_cache=60,
+                    use_dns_cache=False  # 禁用DNS缓存，避免缓存问题
+                )
+                timeout = aiohttp.ClientTimeout(total=15)  # 增加超时时间
+            else:
+                # 本地环境使用标准配置
+                connector = aiohttp.TCPConnector(
+                    ssl=False,
+                    limit=100,
+                    limit_per_host=50,
+                    ttl_dns_cache=300,
+                    use_dns_cache=True
+                )
+                timeout = aiohttp.ClientTimeout(total=10)
 
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10),
-            connector=connector,
-            trust_env=True
-        )
-        await self._get_nip_domain()
-        return self
+            self.session = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=connector,
+                trust_env=True
+            )
+            return self
+        except Exception as e:
+            print(f"❌ 异步上下文管理器初始化失败: {e}")
+            # 如果初始化失败，确保session为None
+            self.session = None
+            raise
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器出口"""
@@ -127,24 +153,33 @@ class IPTester:
     async def _get_nip_domain(self) -> None:
         """获取NIP域名"""
         import os
-        if os.environ.get('GITHUB_ACTIONS') == 'true':
-            print("检测到GitHub Actions环境，使用GitHub优化域名")
+        
+        # 增强GitHub环境检测
+        github_env = os.environ.get('GITHUB_ACTIONS')
+        runner_env = os.environ.get('RUNNER_ENVIRONMENT')
+        
+        if github_env == 'true' or runner_env == 'github-hosted':
+            print("🔧 检测到GitHub Actions环境，使用GitHub优化域名")
             # GitHub Actions环境专用域名，确保可访问性
             self.nip_domain = "ip.sb"
+            print(f"📡 GitHub环境使用域名: {self.nip_domain}")
             return
 
-        # 备用域名列表
-        backup_domains = ["nip.lfree.org", "ip.090227.xyz", "nip.top", "ip.sb"]
+        # 本地环境使用备用域名列表
+        backup_domains = ["ip.sb", "nip.lfree.org", "ip.090227.xyz", "nip.top"]
         self.nip_domain = backup_domains[0]
-        print(f"📡 使用域名: {self.nip_domain}")
+        print(f"📡 本地环境使用域名: {self.nip_domain}")
     
     async def get_all_ips(self) -> List[str]:
         """获取所有IP源的IP列表"""
         all_ips = set()
         
-        # 如果是GitHub Actions环境，使用优化的IP源列表
+        # 增强GitHub环境检测
         import os
-        if os.environ.get('GITHUB_ACTIONS') == 'true':
+        github_env = os.environ.get('GITHUB_ACTIONS')
+        runner_env = os.environ.get('RUNNER_ENVIRONMENT')
+        
+        if github_env == 'true' or runner_env == 'github-hosted':
             print("🔧 GitHub Actions环境：使用优化IP源列表")
             # 在GitHub环境中，优先使用可靠且可访问的IP源
             github_sources = ["official", "as13335", "as209242", "cm"]
@@ -196,7 +231,11 @@ class IPTester:
         try:
             # 为GitHub Actions环境添加超时控制
             import os
-            timeout_seconds = 10 if os.environ.get('GITHUB_ACTIONS') == 'true' else 30
+            github_env = os.environ.get('GITHUB_ACTIONS')
+            runner_env = os.environ.get('RUNNER_ENVIRONMENT')
+            
+            # GitHub环境使用更短的超时时间
+            timeout_seconds = 10 if (github_env == 'true' or runner_env == 'github-hosted') else 30
             
             if ip_source == "cfip":
                 url = "https://raw.githubusercontent.com/qianxiu203/cfipcaiji/refs/heads/main/ip.txt"
@@ -539,8 +578,12 @@ class IPTester:
         """单次IP测试"""
         import os
         
+        # 增强GitHub环境检测
+        github_env = os.environ.get('GITHUB_ACTIONS')
+        runner_env = os.environ.get('RUNNER_ENVIRONMENT')
+        
         # GitHub环境使用更可靠的测试方法
-        if os.environ.get('GITHUB_ACTIONS') == 'true':
+        if github_env == 'true' or runner_env == 'github-hosted':
             return await self._github_single_test(ip, port, timeout)
         else:
             return await self._local_single_test(ip, port, timeout)
