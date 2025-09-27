@@ -11,7 +11,7 @@ IP延迟测试脚本 - 多国家IP测试与分类存储
 TARGET_COUNTRIES = ["US","HK","JP","SG"]
 
 # 每个国家的目标IP数量
-TARGET_COUNTS = {"US": 20,"HK": 10,"JP": 5,"SG": 5}
+TARGET_COUNTS = {"US": 20,"HK": 20,"JP": 5,"SG": 5}
 
 # 测试端口（只测试8443端口）
 TARGET_PORTS = "8443"
