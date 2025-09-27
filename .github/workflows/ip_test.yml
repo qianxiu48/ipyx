@@ -49,8 +49,8 @@ jobs:
         # 添加超时控制和错误处理
         set +e  # 允许命令失败而不停止脚本
         
-        # 使用优化的参数配置，减少IP数量提高成功率
-        python ip_tester.py --output ip_results --max-ips 2000 --concurrent 20
+        # 使用优化的参数配置，增加超时时间和调试信息
+        python ip_tester.py --output ip_results --max-ips 3000 --concurrent 15 --max-latency 3000
         exit_code=$?
         set -e  # 恢复错误处理
         

@@ -537,6 +537,16 @@ class IPTester:
     
     async def _single_test(self, ip: str, port: int, timeout: float) -> Optional[Dict]:
         """单次IP测试"""
+        import os
+        
+        # GitHub环境使用更可靠的测试方法
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            return await self._github_single_test(ip, port, timeout)
+        else:
+            return await self._local_single_test(ip, port, timeout)
+    
+    async def _local_single_test(self, ip: str, port: int, timeout: float) -> Optional[Dict]:
+        """本地环境单次IP测试"""
         try:
             # 构建测试URL
             parts = ip.split('.')
@@ -574,6 +584,61 @@ class IPTester:
                             'response_ip': response_ip
                         }
 
+            return None
+
+        except asyncio.TimeoutError:
+            return None
+        except Exception as e:
+            return None
+    
+    async def _github_single_test(self, ip: str, port: int, timeout: float) -> Optional[Dict]:
+        """GitHub环境单次IP测试"""
+        try:
+            # GitHub环境使用更可靠的测试方法
+            # 方法1: 直接IP测试（绕过域名解析）
+            test_urls = [
+                f"https://{ip}:{port}/cdn-cgi/trace",  # 直接IP访问
+                f"http://{ip}:{port}/cdn-cgi/trace",   # HTTP协议
+            ]
+            
+            for test_url in test_urls:
+                try:
+                    start_time = time.time()
+                    
+                    # GitHub环境增加超时时间
+                    github_timeout = min(timeout * 2, 15.0)  # 最长15秒
+                    
+                    async with self.session.get(
+                        test_url,
+                        timeout=aiohttp.ClientTimeout(total=github_timeout, connect=github_timeout/2),
+                        allow_redirects=False,
+                        ssl=False  # 禁用SSL验证，避免证书问题
+                    ) as response:
+                        if response.status == 200:
+                            latency = (time.time() - start_time) * 1000
+                            response_text = await response.text()
+
+                            # 解析trace响应
+                            trace_data = self._parse_trace_response(response_text)
+
+                            if trace_data and trace_data.get('ip') and trace_data.get('colo'):
+                                response_ip = trace_data['ip']
+                                ip_type = 'official'
+
+                                if ':' in response_ip or response_ip == ip:
+                                    ip_type = 'proxy'
+
+                                return {
+                                    'ip': ip,
+                                    'port': port,
+                                    'latency': latency,
+                                    'colo': trace_data['colo'],
+                                    'type': ip_type,
+                                    'response_ip': response_ip
+                                }
+                except Exception:
+                    continue
+            
             return None
 
         except asyncio.TimeoutError:
