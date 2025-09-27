@@ -42,10 +42,26 @@ jobs:
         
         # 运行IP测试（使用脚本默认配置）
         echo "🚀 开始IP测试..."
-        # 添加超时控制和错误处理
-        timeout 8m python ip_tester.py --output ip_results || echo "⚠️ IP测试超时或失败，继续执行后续步骤"
         
-        # 检查是否创建了结果目录
+        # 创建输出目录（确保存在）
+        mkdir -p ip_results
+        echo "✅ 已创建ip_results目录"
+        
+        # 添加超时控制和错误处理
+        set +e  # 允许命令失败而不停止脚本
+        timeout 8m python ip_tester.py --output ip_results
+        exit_code=$?
+        set -e  # 恢复错误处理
+        
+        if [ $exit_code -eq 0 ]; then
+            echo "✅ IP测试成功完成"
+        elif [ $exit_code -eq 124 ]; then
+            echo "⚠️ IP测试超时，但可能已生成部分结果"
+        else
+            echo "⚠️ IP测试失败（退出码: $exit_code），但继续执行后续步骤"
+        fi
+        
+        # 检查是否创建了结果目录和文件
         echo ""
         echo "📁 运行后目录结构:"
         ls -la
@@ -54,27 +70,50 @@ jobs:
         if [ -d "ip_results" ]; then
             echo "✅ ip_results目录存在"
             echo "📂 目录内容:"
-            ls -la ip_results/
+            ls -la ip_results/ 2>/dev/null || echo "⚠️ 无法访问ip_results目录"
             echo ""
             echo "📄 文件列表:"
-            find ip_results -type f -name "*.txt" | head -20
+            find ip_results -type f -name "*.txt" 2>/dev/null | head -20 || echo "⚠️ 未找到txt文件"
         else
             echo "❌ ip_results目录不存在"
             echo "🔍 查找所有可能的结果目录:"
-            find . -type d -name "*result*" -o -name "*ip*" | sort
+            find . -type d -name "*result*" -o -name "*ip*" 2>/dev/null | sort || echo "⚠️ 未找到相关目录"
         fi
+        
+        # 检查是否有任何结果文件
+        echo ""
+        echo "🔍 检查所有txt文件:"
+        find . -name "*.txt" -type f 2>/dev/null | grep -v ".git" | head -20 || echo "⚠️ 未找到任何txt文件"
 
     - name: 将结果文件复制到仓库根目录
       run: |
         echo "📂 将结果文件复制到仓库根目录..."
+        
+        # 检查是否有结果目录
         if [ -d "ip_results" ]; then
           # 复制所有txt文件到仓库根目录
           cp ip_results/*.txt ./
           echo "✅ 结果文件已复制到仓库根目录"
           echo "📄 当前目录下的txt文件:"
-          ls -la *.txt
+          ls -la *.txt 2>/dev/null || echo "⚠️ 没有找到txt文件"
         else
-          echo "❌ 未找到结果目录"
+          echo "❌ 未找到结果目录，检查是否有其他结果文件..."
+          
+          # 检查是否有直接生成的结果文件
+          echo "🔍 查找所有txt文件:"
+          find . -name "*.txt" -type f | grep -v ".git" | head -20
+          
+          # 如果找到txt文件，直接使用它们
+          txt_files=$(find . -name "*.txt" -type f | grep -v ".git" | head -10)
+          if [ -n "$txt_files" ]; then
+            echo "✅ 找到以下txt文件，直接使用:"
+            echo "$txt_files"
+          else
+            echo "⚠️ 未找到任何结果文件，创建空的summary.txt"
+            echo "# IP测试运行完成，但未生成结果文件" > summary.txt
+            echo "# 生成时间: $(date +'%Y-%m-%d %H:%M:%S')" >> summary.txt
+            echo "# 可能原因: 测试超时、网络问题或IP源不可用" >> summary.txt
+          fi
         fi
 
     - name: 提交结果文件到仓库
